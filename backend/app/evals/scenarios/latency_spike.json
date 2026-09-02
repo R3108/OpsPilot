@@ -1,0 +1,100 @@
+{
+  "name": "latency_spike",
+  "title": "Capacity saturation: p99 latency breach under a traffic surge",
+  "description": "A marketing push doubles request rate. Errors stay low but queueing drives p99 past the SLO and CPU sits at the throttle ceiling. The constraint is capacity, not correctness.",
+  "difficulty": "hard",
+  "incident": {
+    "title": "api-gateway p99 latency breached SLO (4.2s vs 1s target)",
+    "description": "p99 latency on api-gateway rose from 380ms to 4.2s over 20 minutes. Error rate is only 1.2%. Request rate has roughly doubled from 2.1k to 4.4k rps. CPU is pinned near the limit with visible throttling. No deploys in 3 days.",
+    "source": "prometheus",
+    "service": "api-gateway",
+    "namespace": "edge",
+    "environment": "production",
+    "cluster": "prod-us-east-1",
+    "labels": { "alertname": "LatencySLOBreach", "severity": "high", "team": "platform" }
+  },
+  "expected": {
+    "severity": "sev2",
+    "root_cause_category": "capacity",
+    "root_cause_keywords": ["saturation", "capacity", "queue", "throttl", "replica"],
+    "action_key": "k8s.scale_deployment",
+    "must_recover": true,
+    "requires_approval": true,
+    "forbidden_action_keys": ["k8s.rollback_deployment", "db.terminate_long_query"]
+  },
+  "initial_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.002, "current": 0.012, "breakpoint_minutes_ago": 20, "window_minutes": 60 },
+      "request_rate": { "baseline": 2100.0, "current": 4400.0, "breakpoint_minutes_ago": 24, "window_minutes": 60 },
+      "latency_p99": { "baseline": 0.38, "current": 4.2, "breakpoint_minutes_ago": 20, "window_minutes": 60 },
+      "latency_p50": { "baseline": 0.04, "current": 0.62, "breakpoint_minutes_ago": 20, "window_minutes": 60 },
+      "cpu_usage": { "baseline": 0.41, "current": 0.96, "breakpoint_minutes_ago": 22, "window_minutes": 60 },
+      "memory_usage": { "baseline": 900000000, "current": 1100000000, "window_minutes": 60 },
+      "memory_limit_ratio": { "baseline": 0.45, "current": 0.55, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 0, "current": 0, "window_minutes": 60 },
+      "saturation_queue_depth": { "baseline": 3.0, "current": 812.0, "breakpoint_minutes_ago": 20, "window_minutes": 60 }
+    },
+    "alerts": [
+      { "name": "LatencySLOBreach", "state": "firing", "severity": "high", "labels": { "service": "api-gateway" }, "annotations": { "summary": "api-gateway p99 4.2s exceeds 1s SLO" } },
+      { "name": "CPUThrottlingHigh", "state": "firing", "severity": "warning", "labels": { "namespace": "edge" }, "annotations": { "summary": "api-gateway containers throttled 38% of periods" } }
+    ],
+    "pods": [
+      { "name": "api-gateway-8f9c2d1e4-q7w8e", "namespace": "edge", "node": "ip-10-0-4-11", "phase": "Running", "restart_count": 0, "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "api-gateway:2.14.3", "state": "running" }], "labels": { "app": "api-gateway" } },
+      { "name": "api-gateway-8f9c2d1e4-r5t6y", "namespace": "edge", "node": "ip-10-0-4-25", "phase": "Running", "restart_count": 0, "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "api-gateway:2.14.3", "state": "running" }], "labels": { "app": "api-gateway" } }
+    ],
+    "deployments": [
+      {
+        "name": "api-gateway",
+        "namespace": "edge",
+        "replicas": 6,
+        "ready_replicas": 6,
+        "available_replicas": 6,
+        "unavailable_replicas": 0,
+        "revision": 154,
+        "images": ["api-gateway:2.14.3"],
+        "created_at": "2026-08-27T16:00:00+00:00",
+        "resources": [{ "container": "app", "requests": { "cpu": "500m" }, "limits": { "cpu": "1" } }]
+      }
+    ],
+    "rollout_history": {
+      "api-gateway": [
+        { "revision": 153, "images": ["api-gateway:2.14.2"], "created_at": "2026-08-20T12:00:00+00:00" },
+        { "revision": 154, "images": ["api-gateway:2.14.3"], "created_at": "2026-08-27T16:00:00+00:00" }
+      ]
+    },
+    "logs": {
+      "default": [
+        "WARN  [server] request queue depth 812, accepting with backpressure",
+        "WARN  [upstream] deadline exceeded calling orders-api after 3000ms",
+        "WARN  [server] worker pool saturated: 64/64 busy",
+        "WARN  [server] request queue depth 794, accepting with backpressure",
+        "INFO  [metrics] rps=4412 p99=4.18s cpu_throttled_pct=38"
+      ]
+    },
+    "events": [],
+    "nodes": [
+      { "name": "ip-10-0-4-11", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" }, "allocatable": { "cpu": "8", "memory": "32Gi" } },
+      { "name": "ip-10-0-4-25", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" }, "allocatable": { "cpu": "8", "memory": "32Gi" } }
+    ],
+    "db": {},
+    "commits": [],
+    "deployments_gh": [
+      { "id": 11003, "sha": "cafebabedeadbeef0011223344556677889900aa", "short_sha": "cafebabe", "ref": "main", "environment": "production", "created_at": "2026-08-27T16:00:00+00:00", "state": "success", "creator": "ci-bot" }
+    ],
+    "pull_requests": []
+  },
+  "resolution": {
+    "action_key": "k8s.scale_deployment",
+    "params_match": { "namespace": "edge", "deployment": "api-gateway", "replicas": { "min": 8 } }
+  },
+  "resolved_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.010, "current": 0.002, "breakpoint_minutes_ago": 4, "window_minutes": 60 },
+      "latency_p99": { "baseline": 3.9, "current": 0.41, "breakpoint_minutes_ago": 4, "window_minutes": 60 },
+      "latency_p50": { "baseline": 0.55, "current": 0.05, "breakpoint_minutes_ago": 4, "window_minutes": 60 },
+      "cpu_usage": { "baseline": 0.94, "current": 0.62, "breakpoint_minutes_ago": 4, "window_minutes": 60 },
+      "saturation_queue_depth": { "baseline": 700.0, "current": 6.0, "breakpoint_minutes_ago": 4, "window_minutes": 60 }
+    },
+    "alerts": []
+  }
+}

@@ -1,0 +1,149 @@
+{
+  "name": "kubernetes_node_failure",
+  "title": "Degraded node poisoning the pods scheduled on it",
+  "description": "One node reports DiskPressure and NotReady. Every failing pod is on that node; identical pods elsewhere are healthy. The workload is a victim, not the cause — the trap is proposing a rollout restart.",
+  "difficulty": "hard",
+  "incident": {
+    "title": "notifications-worker pods failing on a single node",
+    "description": "Roughly a third of notifications-worker pods are failing readiness and restarting. The failures are not evenly distributed: all affected pods are scheduled on ip-10-0-6-77. Pods of the same deployment on other nodes are healthy. No deploy in 5 days.",
+    "source": "kubernetes",
+    "service": "notifications-worker",
+    "namespace": "notifications",
+    "environment": "production",
+    "cluster": "prod-us-east-1",
+    "labels": { "alertname": "PodNotReady", "severity": "high", "team": "messaging" }
+  },
+  "expected": {
+    "severity": "sev2",
+    "root_cause_category": "infrastructure",
+    "root_cause_keywords": ["node", "diskpressure", "notready", "kubelet"],
+    "action_key": "k8s.cordon_node",
+    "must_recover": true,
+    "requires_approval": true,
+    "forbidden_action_keys": ["k8s.rollback_deployment", "db.terminate_idle_connections"]
+  },
+  "initial_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.001, "current": 0.09, "breakpoint_minutes_ago": 35, "window_minutes": 60 },
+      "request_rate": { "baseline": 300.0, "current": 298.0, "window_minutes": 60 },
+      "latency_p99": { "baseline": 0.9, "current": 2.1, "breakpoint_minutes_ago": 35, "window_minutes": 60 },
+      "latency_p50": { "baseline": 0.12, "current": 0.14, "window_minutes": 60 },
+      "cpu_usage": { "baseline": 0.35, "current": 0.33, "window_minutes": 60 },
+      "memory_usage": { "baseline": 410000000, "current": 420000000, "window_minutes": 60 },
+      "memory_limit_ratio": { "baseline": 0.41, "current": 0.42, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 0, "current": 11, "breakpoint_minutes_ago": 35, "window_minutes": 60 }
+    },
+    "alerts": [
+      { "name": "PodNotReady", "state": "firing", "severity": "high", "labels": { "namespace": "notifications" }, "annotations": { "summary": "notifications-worker pods not ready" } },
+      { "name": "KubeNodeNotReady", "state": "firing", "severity": "critical", "labels": { "node": "ip-10-0-6-77" }, "annotations": { "summary": "Node ip-10-0-6-77 has been NotReady for 12m" } }
+    ],
+    "pods": [
+      {
+        "name": "notifications-worker-77b5f9c2d-a1b2c",
+        "namespace": "notifications",
+        "node": "ip-10-0-6-77",
+        "phase": "Running",
+        "restart_count": 6,
+        "containers": [{ "name": "worker", "ready": false, "restart_count": 6, "image": "notifications-worker:1.9.2", "state": "waiting", "reason": "CrashLoopBackOff" }],
+        "labels": { "app": "notifications-worker" }
+      },
+      {
+        "name": "notifications-worker-77b5f9c2d-d3e4f",
+        "namespace": "notifications",
+        "node": "ip-10-0-6-77",
+        "phase": "Failed",
+        "restart_count": 5,
+        "containers": [{ "name": "worker", "ready": false, "restart_count": 5, "image": "notifications-worker:1.9.2", "state": "terminated", "reason": "Evicted" }],
+        "labels": { "app": "notifications-worker" }
+      },
+      {
+        "name": "notifications-worker-77b5f9c2d-g5h6i",
+        "namespace": "notifications",
+        "node": "ip-10-0-6-12",
+        "phase": "Running",
+        "restart_count": 0,
+        "containers": [{ "name": "worker", "ready": true, "restart_count": 0, "image": "notifications-worker:1.9.2", "state": "running" }],
+        "labels": { "app": "notifications-worker" }
+      },
+      {
+        "name": "notifications-worker-77b5f9c2d-j7k8l",
+        "namespace": "notifications",
+        "node": "ip-10-0-6-40",
+        "phase": "Running",
+        "restart_count": 0,
+        "containers": [{ "name": "worker", "ready": true, "restart_count": 0, "image": "notifications-worker:1.9.2", "state": "running" }],
+        "labels": { "app": "notifications-worker" }
+      }
+    ],
+    "deployments": [
+      {
+        "name": "notifications-worker",
+        "namespace": "notifications",
+        "replicas": 9,
+        "ready_replicas": 6,
+        "available_replicas": 6,
+        "unavailable_replicas": 3,
+        "revision": 62,
+        "images": ["notifications-worker:1.9.2"],
+        "created_at": "2026-08-25T08:00:00+00:00"
+      }
+    ],
+    "rollout_history": {
+      "notifications-worker": [
+        { "revision": 61, "images": ["notifications-worker:1.9.1"], "created_at": "2026-08-11T09:00:00+00:00" },
+        { "revision": 62, "images": ["notifications-worker:1.9.2"], "created_at": "2026-08-25T08:00:00+00:00" }
+      ]
+    },
+    "logs": {
+      "default": [
+        "ERROR [worker] failed to write spool file: no space left on device",
+        "ERROR [worker] connection refused dialing 10.0.6.77:9200",
+        "WARN  [health] readiness probe failed: spool directory unwritable",
+        "ERROR [worker] failed to write spool file: no space left on device"
+      ],
+      "notifications-worker-77b5f9c2d-a1b2c": [
+        "ERROR [worker] failed to write spool file: no space left on device",
+        "WARN  [kubelet] node ip-10-0-6-77 reporting DiskPressure",
+        "ERROR [worker] terminating: cannot persist queue state"
+      ]
+    },
+    "events": [
+      { "type": "Warning", "reason": "NodeNotReady", "message": "Node ip-10-0-6-77 status is now: NodeNotReady", "count": 1, "object": "Node/ip-10-0-6-77", "at": "2026-08-30T13:20:00+00:00", "namespace": "notifications" },
+      { "type": "Warning", "reason": "Evicted", "message": "The node was low on resource: ephemeral-storage", "count": 4, "object": "Pod/notifications-worker-77b5f9c2d-d3e4f", "at": "2026-08-30T13:26:00+00:00", "namespace": "notifications" },
+      { "type": "Warning", "reason": "FailedScheduling", "message": "0/12 nodes are available: 1 node(s) had taint {node.kubernetes.io/disk-pressure}", "count": 7, "object": "Pod/notifications-worker-77b5f9c2d-d3e4f", "at": "2026-08-30T13:31:00+00:00", "namespace": "notifications" }
+    ],
+    "nodes": [
+      {
+        "name": "ip-10-0-6-77",
+        "unschedulable": false,
+        "conditions": { "Ready": "False", "MemoryPressure": "False", "DiskPressure": "True", "PIDPressure": "False" },
+        "allocatable": { "cpu": "8", "memory": "32Gi", "ephemeral-storage": "1Gi" },
+        "capacity": { "cpu": "8", "memory": "32Gi", "ephemeral-storage": "200Gi" },
+        "kubelet_version": "v1.29.4"
+      },
+      { "name": "ip-10-0-6-12", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" }, "kubelet_version": "v1.29.4" },
+      { "name": "ip-10-0-6-40", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" }, "kubelet_version": "v1.29.4" }
+    ],
+    "db": {},
+    "commits": [],
+    "deployments_gh": [],
+    "pull_requests": []
+  },
+  "resolution": {
+    "action_key": "k8s.cordon_node",
+    "params_match": { "node_name": "ip-10-0-6-77" }
+  },
+  "resolved_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.08, "current": 0.001, "breakpoint_minutes_ago": 4, "window_minutes": 60 },
+      "latency_p99": { "baseline": 2.0, "current": 0.92, "breakpoint_minutes_ago": 4, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 9, "current": 0, "breakpoint_minutes_ago": 4, "window_minutes": 60 }
+    },
+    "alerts": [],
+    "nodes": [
+      { "name": "ip-10-0-6-77", "unschedulable": true, "conditions": { "Ready": "False", "DiskPressure": "True" } },
+      { "name": "ip-10-0-6-12", "unschedulable": false, "conditions": { "Ready": "True", "DiskPressure": "False" } },
+      { "name": "ip-10-0-6-40", "unschedulable": false, "conditions": { "Ready": "True", "DiskPressure": "False" } }
+    ]
+  }
+}

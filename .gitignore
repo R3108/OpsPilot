@@ -1,0 +1,41 @@
+# --- secrets: never commit these -------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+kubeconfig*
+
+# --- python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.db
+*.db-wal
+*.db-shm
+eval-report.json
+eval-live.json
+
+# --- node ------------------------------------------------------------------
+node_modules/
+.next/
+out/
+next-env.d.ts
+.eslintcache
+*.tsbuildinfo
+
+# --- editors / os ----------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.swp

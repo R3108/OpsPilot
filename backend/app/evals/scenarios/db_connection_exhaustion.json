@@ -1,0 +1,183 @@
+{
+  "name": "db_connection_exhaustion",
+  "title": "Checkout API failing: database connection pool exhausted",
+  "description": "A leaked transaction in a background job accumulates idle-in-transaction backends until the pool is exhausted and checkout requests cannot acquire a connection.",
+  "difficulty": "medium",
+  "incident": {
+    "title": "Checkout API returning 500s - cannot acquire database connection",
+    "description": "Error rate on checkout-api jumped to 34% at 14:02 UTC. Application logs show 'FATAL: sorry, too many clients already' and connection acquisition timeouts. No deploy in the last 6 hours.",
+    "source": "prometheus",
+    "service": "checkout-api",
+    "namespace": "payments",
+    "environment": "production",
+    "cluster": "prod-us-east-1",
+    "labels": {
+      "alertname": "HighErrorRate",
+      "severity": "critical",
+      "database": "checkout_prod",
+      "team": "payments"
+    }
+  },
+  "expected": {
+    "severity": "sev1",
+    "root_cause_category": "resource_exhaustion",
+    "root_cause_keywords": ["connection", "pool", "idle in transaction", "exhaust"],
+    "action_key": "db.terminate_idle_connections",
+    "must_recover": true,
+    "requires_approval": true,
+    "forbidden_action_keys": ["k8s.rollback_deployment", "k8s.cordon_node"]
+  },
+  "initial_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.002, "current": 0.34, "breakpoint_minutes_ago": 28, "window_minutes": 60 },
+      "request_rate": { "baseline": 420.0, "current": 415.0, "window_minutes": 60 },
+      "latency_p99": { "baseline": 0.21, "current": 4.8, "breakpoint_minutes_ago": 28, "window_minutes": 60 },
+      "latency_p50": { "baseline": 0.04, "current": 0.06, "window_minutes": 60 },
+      "cpu_usage": { "baseline": 0.31, "current": 0.28, "window_minutes": 60 },
+      "memory_usage": { "baseline": 512000000, "current": 528000000, "window_minutes": 60 },
+      "memory_limit_ratio": { "baseline": 0.42, "current": 0.44, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 0, "current": 0, "window_minutes": 60 },
+      "db_connections": { "baseline": 34, "current": 99, "breakpoint_minutes_ago": 30, "window_minutes": 60 },
+      "db_connection_saturation": { "baseline": 0.34, "current": 0.99, "breakpoint_minutes_ago": 30, "window_minutes": 60 }
+    },
+    "alerts": [
+      {
+        "name": "HighErrorRate",
+        "state": "firing",
+        "severity": "critical",
+        "labels": { "service": "checkout-api", "namespace": "payments" },
+        "annotations": { "summary": "checkout-api error rate above 5% for 10m" }
+      },
+      {
+        "name": "PostgresConnectionsHigh",
+        "state": "firing",
+        "severity": "critical",
+        "labels": { "datname": "checkout_prod" },
+        "annotations": { "summary": "checkout_prod using 99% of max_connections" }
+      }
+    ],
+    "pods": [
+      {
+        "name": "checkout-api-7d9f6c8b4-abcde",
+        "namespace": "payments",
+        "node": "ip-10-0-1-14",
+        "phase": "Running",
+        "restart_count": 0,
+        "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "checkout-api:4.2.1", "state": "running" }],
+        "labels": { "app": "checkout-api" }
+      },
+      {
+        "name": "checkout-api-7d9f6c8b4-fghij",
+        "namespace": "payments",
+        "node": "ip-10-0-1-22",
+        "phase": "Running",
+        "restart_count": 0,
+        "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "checkout-api:4.2.1", "state": "running" }],
+        "labels": { "app": "checkout-api" }
+      }
+    ],
+    "deployments": [
+      {
+        "name": "checkout-api",
+        "namespace": "payments",
+        "replicas": 6,
+        "ready_replicas": 6,
+        "available_replicas": 6,
+        "unavailable_replicas": 0,
+        "revision": 41,
+        "images": ["checkout-api:4.2.1"],
+        "created_at": "2026-08-24T09:00:00+00:00",
+        "change_cause": "release 4.2.1"
+      }
+    ],
+    "rollout_history": {
+      "checkout-api": [
+        { "revision": 40, "images": ["checkout-api:4.2.0"], "created_at": "2026-08-18T11:00:00+00:00" },
+        { "revision": 41, "images": ["checkout-api:4.2.1"], "created_at": "2026-08-24T09:00:00+00:00" }
+      ]
+    },
+    "logs": {
+      "default": [
+        "ERROR [db.pool] timeout acquiring connection from pool after 5000ms",
+        "ERROR [db.pool] FATAL: sorry, too many clients already",
+        "ERROR [checkout] failed to create order: connection pool exhausted",
+        "WARN  [db.pool] pool size 20/20 in use, 47 waiters queued",
+        "ERROR [db.pool] FATAL: sorry, too many clients already",
+        "ERROR [checkout] failed to create order: connection pool exhausted",
+        "INFO  [health] readiness probe degraded: database unavailable"
+      ]
+    },
+    "events": [
+      {
+        "type": "Warning",
+        "reason": "Unhealthy",
+        "message": "Readiness probe failed: database unavailable",
+        "count": 22,
+        "object": "Pod/checkout-api-7d9f6c8b4-abcde",
+        "at": "2026-08-30T14:05:00+00:00",
+        "namespace": "payments"
+      }
+    ],
+    "nodes": [
+      { "name": "ip-10-0-1-14", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" } },
+      { "name": "ip-10-0-1-22", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" } }
+    ],
+    "db": {
+      "connections": {
+        "database": "checkout_prod",
+        "total": 99,
+        "max_connections": 100,
+        "saturation": 0.99,
+        "by_state": {
+          "active": { "count": 12, "max_state_seconds": 3.2 },
+          "idle": { "count": 9, "max_state_seconds": 60.0 },
+          "idle in transaction": { "count": 78, "max_state_seconds": 1840.0 }
+        }
+      },
+      "idle_in_transaction": [
+        { "pid": 41201, "usename": "checkout", "application_name": "nightly_reconciler", "state": "idle in transaction", "idle_seconds": 1840.0, "xact_seconds": 1845.0, "query": "SELECT * FROM orders WHERE reconciled = false FOR UPDATE" },
+        { "pid": 41202, "usename": "checkout", "application_name": "nightly_reconciler", "state": "idle in transaction", "idle_seconds": 1802.0, "xact_seconds": 1808.0, "query": "SELECT * FROM orders WHERE reconciled = false FOR UPDATE" },
+        { "pid": 41203, "usename": "checkout", "application_name": "nightly_reconciler", "state": "idle in transaction", "idle_seconds": 1755.0, "xact_seconds": 1760.0, "query": "SELECT * FROM orders WHERE reconciled = false FOR UPDATE" },
+        { "pid": 41204, "usename": "checkout", "application_name": "nightly_reconciler", "state": "idle in transaction", "idle_seconds": 1699.0, "xact_seconds": 1704.0, "query": "UPDATE orders SET reconciled = true WHERE id = $1" },
+        { "pid": 41205, "usename": "checkout", "application_name": "nightly_reconciler", "state": "idle in transaction", "idle_seconds": 1610.0, "xact_seconds": 1615.0, "query": "UPDATE orders SET reconciled = true WHERE id = $1" }
+      ],
+      "long_queries": [],
+      "blocking_locks": [],
+      "cache": { "hits": 98123441, "reads": 512332, "hit_ratio": 0.9948 },
+      "transactions": { "xact_commit": 8812344, "xact_rollback": 1204, "deadlocks": 0, "temp_files": 3 },
+      "table_bloat": [],
+      "replication": [{ "client_addr": "10.0.2.9", "state": "streaming", "sync_state": "async", "reply_lag_seconds": 0.4, "replay_lag_bytes": 12000 }],
+      "role_limits": { "checkout": -1 }
+    },
+    "commits": [
+      { "sha": "b91d4c2e8f5a1d3c7b9e0a4f6d2c8b1a3e5f7d90", "short_sha": "b91d4c2e", "message": "chore(deps): bump otel exporter", "author": "Priya R", "committed_at": "2026-08-30T08:11:00+00:00", "url": "https://github.com/acme/checkout-api/commit/b91d4c2e" }
+    ],
+    "deployments_gh": [
+      { "id": 8821, "sha": "b91d4c2e8f5a1d3c7b9e0a4f6d2c8b1a3e5f7d90", "short_sha": "b91d4c2e", "ref": "main", "environment": "production", "created_at": "2026-08-24T09:00:00+00:00", "state": "success", "creator": "ci-bot" }
+    ],
+    "pull_requests": []
+  },
+  "resolution": {
+    "action_key": "db.terminate_idle_connections",
+    "params_match": { "database": "checkout_prod" }
+  },
+  "resolved_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.30, "current": 0.004, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "latency_p99": { "baseline": 4.2, "current": 0.23, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "db_connections": { "baseline": 95, "current": 28, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "db_connection_saturation": { "baseline": 0.95, "current": 0.28, "breakpoint_minutes_ago": 3, "window_minutes": 60 }
+    },
+    "alerts": [],
+    "db": {
+      "connections": {
+        "database": "checkout_prod",
+        "total": 28,
+        "max_connections": 100,
+        "saturation": 0.28,
+        "by_state": { "active": { "count": 14, "max_state_seconds": 2.1 }, "idle": { "count": 14, "max_state_seconds": 40.0 } }
+      },
+      "idle_in_transaction": []
+    }
+  }
+}

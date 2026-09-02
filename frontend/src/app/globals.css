@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/*
+ * OpsPilot runs on a wall in a war room and in a browser tab at 3am, so the
+ * palette is dark-first with a deliberately narrow set of accent colours:
+ * severity/risk own red→amber, everything else stays neutral. If a screen looks
+ * colourful, something is wrong.
+ */
+@theme {
+  --color-canvas: oklch(0.16 0.012 265);
+  --color-surface: oklch(0.19 0.014 265);
+  --color-surface-raised: oklch(0.23 0.016 265);
+  --color-border-subtle: oklch(0.30 0.016 265);
+  --color-text-primary: oklch(0.95 0.005 265);
+  --color-text-secondary: oklch(0.72 0.012 265);
+  --color-text-muted: oklch(0.58 0.014 265);
+  --color-accent: oklch(0.72 0.15 250);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono",
+    Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scrollbars that do not shout. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.35 0.016 265) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: oklch(0.32 0.016 265);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: oklch(0.40 0.016 265);
+}
+
+/* The live pulse on an actively-investigating incident. */
+@keyframes opspilot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.animate-live {
+  animation: opspilot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes opspilot-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    oklch(0.22 0.014 265) 25%,
+    oklch(0.27 0.016 265) 37%,
+    oklch(0.22 0.014 265) 63%
+  );
+  background-size: 200% 100%;
+  animation: opspilot-shimmer 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-live,
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* Long provider payloads must scroll inside their container, never widen the page. */
+.scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}

@@ -1,0 +1,108 @@
+{
+  "name": "failed_deployment",
+  "title": "Bad release: null-pointer regression shipped to production",
+  "description": "Error rate steps up exactly as revision 213 finishes rolling out. Traffic is unchanged, resources are healthy — the change itself is the cause.",
+  "difficulty": "easy",
+  "incident": {
+    "title": "orders-api 5xx rate spiked to 41% immediately after deploy",
+    "description": "Error rate on orders-api went from 0.1% to 41% at 09:14 UTC. Deploy of revision 213 (image orders-api:5.1.0) completed at 09:13 UTC. Request rate is flat. CPU and memory are normal. Stack traces show a NullPointerException in OrderPricingService.",
+    "source": "grafana",
+    "service": "orders-api",
+    "namespace": "orders",
+    "environment": "production",
+    "cluster": "prod-eu-west-1",
+    "labels": { "alertname": "HighErrorRate", "severity": "critical", "team": "commerce" }
+  },
+  "expected": {
+    "severity": "sev1",
+    "root_cause_category": "deployment",
+    "root_cause_keywords": ["deploy", "revision", "release", "regression"],
+    "action_key": "k8s.rollback_deployment",
+    "must_recover": true,
+    "requires_approval": true,
+    "forbidden_action_keys": ["k8s.scale_deployment", "db.terminate_idle_connections"]
+  },
+  "initial_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.001, "current": 0.41, "breakpoint_minutes_ago": 22, "window_minutes": 60 },
+      "request_rate": { "baseline": 880.0, "current": 875.0, "window_minutes": 60 },
+      "latency_p99": { "baseline": 0.28, "current": 0.31, "window_minutes": 60 },
+      "latency_p50": { "baseline": 0.06, "current": 0.06, "window_minutes": 60 },
+      "cpu_usage": { "baseline": 0.38, "current": 0.36, "window_minutes": 60 },
+      "memory_usage": { "baseline": 780000000, "current": 790000000, "window_minutes": 60 },
+      "memory_limit_ratio": { "baseline": 0.39, "current": 0.40, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 0, "current": 0, "window_minutes": 60 }
+    },
+    "alerts": [
+      { "name": "HighErrorRate", "state": "firing", "severity": "critical", "labels": { "service": "orders-api" }, "annotations": { "summary": "orders-api 5xx rate 41%" } }
+    ],
+    "pods": [
+      { "name": "orders-api-5c8d7b6f9-p3k7t", "namespace": "orders", "node": "ip-10-1-3-8", "phase": "Running", "restart_count": 0, "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "orders-api:5.1.0", "state": "running" }], "labels": { "app": "orders-api" } },
+      { "name": "orders-api-5c8d7b6f9-w9m2r", "namespace": "orders", "node": "ip-10-1-3-19", "phase": "Running", "restart_count": 0, "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "orders-api:5.1.0", "state": "running" }], "labels": { "app": "orders-api" } }
+    ],
+    "deployments": [
+      {
+        "name": "orders-api",
+        "namespace": "orders",
+        "replicas": 8,
+        "ready_replicas": 8,
+        "available_replicas": 8,
+        "unavailable_replicas": 0,
+        "revision": 213,
+        "images": ["orders-api:5.1.0"],
+        "created_at": "2026-08-30T09:13:00+00:00",
+        "change_cause": "deploy 5.1.0 (PR #4471)"
+      }
+    ],
+    "rollout_history": {
+      "orders-api": [
+        { "revision": 211, "images": ["orders-api:5.0.8"], "created_at": "2026-08-21T14:02:00+00:00" },
+        { "revision": 212, "images": ["orders-api:5.0.9"], "created_at": "2026-08-28T11:20:00+00:00", "change_cause": "deploy 5.0.9" },
+        { "revision": 213, "images": ["orders-api:5.1.0"], "created_at": "2026-08-30T09:13:00+00:00", "change_cause": "deploy 5.1.0 (PR #4471)" }
+      ]
+    },
+    "logs": {
+      "default": [
+        "INFO  [server] starting orders-api 5.1.0",
+        "ERROR [http] 500 POST /v1/orders - java.lang.NullPointerException: Cannot invoke \"Discount.rate()\" because \"discount\" is null",
+        "ERROR [OrderPricingService] at OrderPricingService.applyDiscount(OrderPricingService.java:142)",
+        "ERROR [http] 500 POST /v1/orders - java.lang.NullPointerException: Cannot invoke \"Discount.rate()\" because \"discount\" is null",
+        "ERROR [http] 500 POST /v1/orders - java.lang.NullPointerException: Cannot invoke \"Discount.rate()\" because \"discount\" is null",
+        "WARN  [metrics] 5xx ratio 0.41 over last 60s"
+      ]
+    },
+    "events": [],
+    "nodes": [
+      { "name": "ip-10-1-3-8", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" } },
+      { "name": "ip-10-1-3-19", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" } }
+    ],
+    "db": {},
+    "commits": [
+      { "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "short_sha": "a1b2c3d4", "message": "feat(pricing): apply campaign discounts at checkout\n\nCo-authored-by: Sam L", "author": "Marco T", "committed_at": "2026-08-30T08:55:00+00:00", "url": "https://github.com/acme/orders-api/commit/a1b2c3d4" },
+      { "sha": "99887766554433221100ffeeddccbbaa99887766", "short_sha": "99887766", "message": "test: add pricing fixtures", "author": "Marco T", "committed_at": "2026-08-30T08:51:00+00:00", "url": "https://github.com/acme/orders-api/commit/99887766" }
+    ],
+    "deployments_gh": [
+      { "id": 10442, "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "short_sha": "a1b2c3d4", "ref": "main", "environment": "production", "created_at": "2026-08-30T09:13:00+00:00", "state": "success", "creator": "ci-bot", "description": "Deploy 5.1.0" }
+    ],
+    "pull_requests": [
+      { "number": 4471, "title": "feat(pricing): apply campaign discounts at checkout", "author": "marco-t", "merged_at": "2026-08-30T08:54:00+00:00", "merge_commit_sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "url": "https://github.com/acme/orders-api/pull/4471", "labels": ["pricing"] }
+    ],
+    "annotations": [
+      { "id": 771, "text": "deploy orders-api 5.1.0", "tags": ["deploy", "orders-api"], "at": "2026-08-30T09:13:00+00:00" }
+    ]
+  },
+  "resolution": {
+    "action_key": "k8s.rollback_deployment",
+    "params_match": { "namespace": "orders", "deployment": "orders-api" }
+  },
+  "resolved_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.38, "current": 0.001, "breakpoint_minutes_ago": 2, "window_minutes": 60 },
+      "latency_p99": { "baseline": 0.30, "current": 0.27, "window_minutes": 60 }
+    },
+    "alerts": [],
+    "deployments": [
+      { "name": "orders-api", "namespace": "orders", "replicas": 8, "ready_replicas": 8, "available_replicas": 8, "unavailable_replicas": 0, "revision": 214, "images": ["orders-api:5.0.9"], "change_cause": "OpsPilot rollback to revision 212" }
+    ]
+  }
+}

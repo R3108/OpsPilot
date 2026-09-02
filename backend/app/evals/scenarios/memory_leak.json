@@ -1,0 +1,131 @@
+{
+  "name": "memory_leak",
+  "title": "Search service OOMKilled repeatedly - memory leak since 3.8.0",
+  "description": "Working-set memory grows monotonically after each start, hits the container limit, and the kubelet OOMKills the container. Capacity degrades as replicas cycle.",
+  "difficulty": "medium",
+  "incident": {
+    "title": "search-api pods repeatedly OOMKilled and crash-looping",
+    "description": "Pods in namespace search have restarted 14 times in the last hour with exit code 137. Memory working set climbs steadily from ~600Mi to the 2Gi limit over roughly 40 minutes after each restart. Latency degrades as replicas cycle.",
+    "source": "kubernetes",
+    "service": "search-api",
+    "namespace": "search",
+    "environment": "production",
+    "cluster": "prod-us-east-1",
+    "labels": { "alertname": "PodCrashLooping", "severity": "high", "team": "discovery" }
+  },
+  "expected": {
+    "severity": "sev2",
+    "root_cause_category": "resource_exhaustion",
+    "root_cause_keywords": ["memory", "leak", "oom", "limit"],
+    "action_key": "k8s.rollout_restart",
+    "must_recover": true,
+    "requires_approval": true,
+    "forbidden_action_keys": ["db.terminate_idle_connections", "db.terminate_long_query"]
+  },
+  "initial_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.001, "current": 0.06, "breakpoint_minutes_ago": 40, "window_minutes": 60 },
+      "request_rate": { "baseline": 1200.0, "current": 1180.0, "window_minutes": 60 },
+      "latency_p99": { "baseline": 0.32, "current": 1.4, "breakpoint_minutes_ago": 40, "window_minutes": 60 },
+      "latency_p50": { "baseline": 0.05, "current": 0.09, "window_minutes": 60 },
+      "cpu_usage": { "baseline": 0.44, "current": 0.51, "window_minutes": 60 },
+      "memory_usage": { "baseline": 640000000, "current": 2080000000, "breakpoint_minutes_ago": 45, "window_minutes": 60 },
+      "memory_limit_ratio": { "baseline": 0.30, "current": 0.97, "breakpoint_minutes_ago": 45, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 0, "current": 14, "breakpoint_minutes_ago": 50, "window_minutes": 60 }
+    },
+    "alerts": [
+      { "name": "PodCrashLooping", "state": "firing", "severity": "high", "labels": { "namespace": "search", "pod": "search-api-6b4c9d7f8-xk2p9" }, "annotations": { "summary": "search-api pods restarting repeatedly" } },
+      { "name": "ContainerMemoryNearLimit", "state": "firing", "severity": "critical", "labels": { "namespace": "search" }, "annotations": { "summary": "search-api memory at 97% of limit" } }
+    ],
+    "pods": [
+      {
+        "name": "search-api-6b4c9d7f8-xk2p9",
+        "namespace": "search",
+        "node": "ip-10-0-2-31",
+        "phase": "Running",
+        "restart_count": 7,
+        "containers": [{ "name": "app", "ready": false, "restart_count": 7, "image": "search-api:3.8.0", "state": "running", "reason": "OOMKilled", "last_exit_code": 137 }],
+        "labels": { "app": "search-api" }
+      },
+      {
+        "name": "search-api-6b4c9d7f8-mn4q1",
+        "namespace": "search",
+        "node": "ip-10-0-2-47",
+        "phase": "Running",
+        "restart_count": 7,
+        "containers": [{ "name": "app", "ready": false, "restart_count": 7, "image": "search-api:3.8.0", "state": "running", "reason": "OOMKilled", "last_exit_code": 137 }],
+        "labels": { "app": "search-api" }
+      }
+    ],
+    "deployments": [
+      {
+        "name": "search-api",
+        "namespace": "search",
+        "replicas": 4,
+        "ready_replicas": 2,
+        "available_replicas": 2,
+        "unavailable_replicas": 2,
+        "revision": 88,
+        "images": ["search-api:3.8.0"],
+        "created_at": "2026-08-27T10:30:00+00:00",
+        "change_cause": "release 3.8.0",
+        "resources": [{ "container": "app", "requests": { "memory": "1Gi" }, "limits": { "memory": "2Gi" } }]
+      }
+    ],
+    "rollout_history": {
+      "search-api": [
+        { "revision": 87, "images": ["search-api:3.7.4"], "created_at": "2026-08-20T10:00:00+00:00" },
+        { "revision": 88, "images": ["search-api:3.8.0"], "created_at": "2026-08-27T10:30:00+00:00" }
+      ]
+    },
+    "logs": {
+      "default": [
+        "INFO  [server] listening on :8080",
+        "WARN  [cache] in-memory index size 1.2GB and growing",
+        "WARN  [cache] in-memory index size 1.7GB and growing",
+        "ERROR [runtime] out of memory: cannot allocate 64MB for index segment",
+        "WARN  [gc] heap after collection 1.9GB of 2.0GB limit",
+        "ERROR [runtime] OOMKilled - container terminated with exit code 137"
+      ],
+      "search-api-6b4c9d7f8-xk2p9": [
+        "WARN  [cache] evicting 0 entries: eviction policy never fires for pinned segments",
+        "WARN  [gc] heap after collection 1.94GB of 2.0GB limit",
+        "ERROR [runtime] out of memory allocating index segment",
+        "ERROR [runtime] OOMKilled - container terminated with exit code 137"
+      ]
+    },
+    "events": [
+      { "type": "Warning", "reason": "OOMKilling", "message": "Memory cgroup out of memory: Killed process 'search-api'", "count": 14, "object": "Pod/search-api-6b4c9d7f8-xk2p9", "at": "2026-08-30T13:44:00+00:00", "namespace": "search" },
+      { "type": "Warning", "reason": "BackOff", "message": "Back-off restarting failed container app", "count": 9, "object": "Pod/search-api-6b4c9d7f8-mn4q1", "at": "2026-08-30T13:52:00+00:00", "namespace": "search" }
+    ],
+    "nodes": [
+      { "name": "ip-10-0-2-31", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" } },
+      { "name": "ip-10-0-2-47", "unschedulable": false, "conditions": { "Ready": "True", "MemoryPressure": "False", "DiskPressure": "False" } }
+    ],
+    "db": {},
+    "commits": [
+      { "sha": "3f7a91b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4", "short_sha": "3f7a91b2", "message": "feat(search): pin hot index segments in memory for faster queries", "author": "Dan K", "committed_at": "2026-08-27T09:40:00+00:00", "url": "https://github.com/acme/search-api/commit/3f7a91b2" }
+    ],
+    "deployments_gh": [
+      { "id": 9912, "sha": "3f7a91b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4", "short_sha": "3f7a91b2", "ref": "main", "environment": "production", "created_at": "2026-08-27T10:30:00+00:00", "state": "success", "creator": "ci-bot" }
+    ],
+    "pull_requests": []
+  },
+  "resolution": {
+    "action_key": "k8s.rollout_restart",
+    "params_match": { "namespace": "search", "deployment": "search-api" }
+  },
+  "resolved_state": {
+    "metrics": {
+      "error_rate": { "baseline": 0.05, "current": 0.002, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "latency_p99": { "baseline": 1.3, "current": 0.34, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "memory_usage": { "baseline": 2000000000, "current": 660000000, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "memory_limit_ratio": { "baseline": 0.95, "current": 0.31, "breakpoint_minutes_ago": 3, "window_minutes": 60 },
+      "pod_restarts": { "baseline": 12, "current": 0, "breakpoint_minutes_ago": 3, "window_minutes": 60 }
+    },
+    "alerts": [],
+    "pods": [
+      { "name": "search-api-6b4c9d7f8-xk2p9", "namespace": "search", "node": "ip-10-0-2-31", "phase": "Running", "restart_count": 0, "containers": [{ "name": "app", "ready": true, "restart_count": 0, "image": "search-api:3.8.0", "state": "running" }] }
+    ]
+  }
+}

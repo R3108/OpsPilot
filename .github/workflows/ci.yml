@@ -1,0 +1,232 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  backend-lint:
+    name: Backend · lint & types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Ruff
+        working-directory: backend
+        run: |
+          ruff check app tests
+          ruff format --check app tests
+      - name: Mypy
+        working-directory: backend
+        # Type errors are informative rather than blocking while the codebase
+        # is still gaining annotations; the tests are the gate.
+        continue-on-error: true
+        run: mypy app
+
+  backend-test:
+    name: Backend · tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: opspilot
+          POSTGRES_PASSWORD: opspilot
+          POSTGRES_DB: opspilot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U opspilot"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Test
+        working-directory: backend
+        env:
+          ENVIRONMENT: test
+          LLM_PROVIDER: fake
+          REDIS_URL: redis://localhost:6379/15
+          SECRET_KEY: ci-secret-key-long-enough-for-jwt-signing-abcdef
+        run: pytest -q --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Verify migrations apply to a real Postgres
+        working-directory: backend
+        env:
+          ENVIRONMENT: development
+          DATABASE_URL: postgresql+asyncpg://opspilot:opspilot@localhost:5432/opspilot_test
+          SECRET_KEY: ci-secret-key-long-enough-for-jwt-signing-abcdef
+        run: |
+          alembic upgrade head
+          # A second run must be a no-op, and downgrade must be reversible.
+          alembic upgrade head
+          alembic downgrade base
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+
+  evals:
+    name: Agent · eval suite
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Runs the real graph end-to-end against the simulated world for all five
+      # incident scenarios, and fails the build if the mean score regresses.
+      - name: Run evals
+        working-directory: backend
+        env:
+          ENVIRONMENT: test
+          LLM_PROVIDER: fake
+          DATABASE_URL: sqlite+aiosqlite:///./evals.db
+          REDIS_URL: redis://localhost:6379/14
+          SECRET_KEY: ci-secret-key-long-enough-for-jwt-signing-abcdef
+        run: |
+          python -m app.cli init-db
+          python -m app.evals.runner --json eval-report.json --min-score 0.9
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: backend/eval-report.json
+
+  frontend:
+    name: Frontend · lint, types & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npm run lint --if-present
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+
+  docker:
+    name: Docker · build images
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: true
+          tags: opspilot-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          tags: opspilot-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the API image
+        run: |
+          docker run -d --name api \
+            -e ENVIRONMENT=development \
+            -e DATABASE_URL=sqlite+aiosqlite:///./smoke.db \
+            -e SECRET_KEY=smoke-test-secret-key-long-enough-for-jwt \
+            -p 8000:8000 opspilot-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health/live; then exit 0; fi
+            sleep 2
+          done
+          echo "API did not become healthy" >&2
+          docker logs api
+          exit 1
+
+  security:
+    name: Security · dependency & secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Audit Python dependencies
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip-audit --skip-editable || true
+      - name: Audit npm dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev || true
+      - name: Check for committed secrets
+        run: |
+          # A crude but effective net for the credential shapes this codebase
+          # explicitly handles. Excludes the .env.example template.
+          if git grep -nEI '(sk-ant-[A-Za-z0-9]|xoxb-[0-9]{8,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})' \
+               -- ':!*.example' ':!*.md' ':!.github/*'; then
+            echo "::error::A credential-shaped string was committed"
+            exit 1
+          fi

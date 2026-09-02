@@ -1,0 +1,142 @@
+# Production overlay:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from the dev stack that actually matter:
+#   * no source bind-mounts, no --reload, no exposed database ports
+#   * every secret comes from the environment with no default — the app refuses
+#     to boot in production without them (see Settings.validate_production)
+#   * resource limits and replica counts, so one runaway investigation cannot
+#     starve the API
+#   * migrations run once, in their own container, before the API starts
+
+services:
+  postgres:
+    ports: []
+    restart: always
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c work_mem=16MB
+      -c log_min_duration_statement=1000
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  redis:
+    ports: []
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  migrate:
+    build:
+      context: ./backend
+    command: alembic upgrade head
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ./backend
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --workers 4
+      --proxy-headers --forwarded-allow-ips '*'
+      --no-server-header
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      CHECKPOINT_DATABASE_URL: ${CHECKPOINT_DATABASE_URL:?CHECKPOINT_DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      # Settings.validate_production() fails the boot if the key for the
+      # selected provider is missing, so the keys stay optional here.
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPSPILOT_MODEL: ${OPSPILOT_MODEL:-claude-sonnet-5}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      NVIDIA_MODEL: ${NVIDIA_MODEL:-openai/gpt-oss-120b}
+      NVIDIA_MODEL_FAST: ${NVIDIA_MODEL_FAST:-nvidia/nemotron-3.5-lightning-30b-a3b}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-true}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-opspilot-production}
+      REMEDIATION_DISABLED: ${REMEDIATION_DISABLED:-false}
+    volumes: []
+    restart: always
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+  worker:
+    build:
+      context: ./backend
+    command: arq app.workers.main.WorkerSettings
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      CHECKPOINT_DATABASE_URL: ${CHECKPOINT_DATABASE_URL:?CHECKPOINT_DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      # Settings.validate_production() fails the boot if the key for the
+      # selected provider is missing, so the keys stay optional here.
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPSPILOT_MODEL: ${OPSPILOT_MODEL:-claude-sonnet-5}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      NVIDIA_MODEL: ${NVIDIA_MODEL:-openai/gpt-oss-120b}
+      NVIDIA_MODEL_FAST: ${NVIDIA_MODEL_FAST:-nvidia/nemotron-3.5-lightning-30b-a3b}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-true}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-opspilot-production}
+      REMEDIATION_DISABLED: ${REMEDIATION_DISABLED:-false}
+    volumes: []
+    restart: always
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      # More than one worker is safe: investigations are guarded by a Redis
+      # advisory lock per incident, and the LangGraph checkpointer is shared.
+      replicas: 2
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+    environment:
+      NODE_ENV: production
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 768M
