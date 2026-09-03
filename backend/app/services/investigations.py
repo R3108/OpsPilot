@@ -17,6 +17,7 @@ from sqlalchemy import select
 from app.agents.graph import get_compiled_graph, thread_config
 from app.agents.runtime import incident_snapshot
 from app.agents.state import initial_state
+from app.core import metrics
 from app.core.config import settings
 from app.core.db import session_scope, set_tenant_setting, tenant_session_scope
 from app.core.errors import ConflictError, NotFoundError
@@ -93,6 +94,10 @@ async def start_investigation(
             await session.flush()
             run_id = run.id
             snapshot = incident_snapshot(incident)
+            metrics.inc(
+                "opspilot_investigations_started_total",
+                labels={"triggered_by": triggered_by},
+            )
 
             await audit.record(
                 session,
@@ -226,6 +231,7 @@ async def _drive(
         final_state = await graph.ainvoke(payload, config=config)
     except Exception as exc:  # noqa: BLE001 - a crashed graph must still be recorded
         log.exception("investigation.failed", incident_id=str(incident_id))
+        metrics.inc("opspilot_investigations_completed_total", labels={"outcome": "failed"})
         await _finish_run(
             run_id,
             status="failed",
@@ -262,6 +268,9 @@ async def _drive(
     interrupts = await _pending_interrupts(graph, config)
     if interrupts:
         await _finish_run(run_id, status="awaiting_approval", phase=AgentPhase.AWAIT_APPROVAL)
+        metrics.inc(
+            "opspilot_investigations_completed_total", labels={"outcome": "awaiting_approval"}
+        )
         log.info("investigation.paused", incident_id=str(incident_id), reason="approval")
         return {
             "status": "awaiting_approval",
@@ -276,6 +285,7 @@ async def _drive(
         phase=AgentPhase.DONE,
         result=_public_state(final_state),
     )
+    metrics.inc("opspilot_investigations_completed_total", labels={"outcome": "completed"})
     async with tenant_session_scope(tenant_id) as session:
         await audit.record(
             session,

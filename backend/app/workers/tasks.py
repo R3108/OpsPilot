@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core import metrics
 from app.core.db import clear_tenant_setting, session_scope, tenant_session_scope
 from app.core.errors import IntegrationError, IntegrationTimeoutError
 from app.core.logging import get_logger, request_id_ctx, tenant_id_ctx
@@ -47,6 +48,7 @@ def _maybe_retry(ctx: Any, exc: Exception, *, max_tries: int = 3) -> None:
         return
     job_try = (ctx or {}).get("job_try", 1) if isinstance(ctx, dict) else 1
     if job_try < max_tries:
+        metrics.inc("opspilot_jobs_retried_total", labels={"job_try": str(job_try)})
         raise Retry(defer=30 * job_try)
 
 
@@ -74,6 +76,7 @@ async def run_investigation(
         return {"status": "already_running"}
     except Exception as exc:  # noqa: BLE001 - already recorded on the run row
         _maybe_retry(ctx, exc)
+        metrics.inc("opspilot_jobs_failed_total", labels={"job": "run_investigation"})
         log.error("job.investigation_failed", incident_id=incident_id, error=str(exc)[:500])
         return {"status": "failed", "error": str(exc)[:500]}
 
@@ -317,6 +320,7 @@ async def reconcile_stuck_investigations(ctx: Any) -> dict[str, Any]:
             started_at=run.started_at.isoformat(),
         )
         await resume_investigation(ctx, str(run.incident_id), str(run.tenant_id))
+        metrics.inc("opspilot_stuck_runs_rescued_total")
         resumed += 1
 
     return {"stuck": len(stuck), "resumed": resumed, "superseded": superseded}

@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.errors import IntegrationError
 from app.core.logging import get_logger
@@ -217,6 +218,11 @@ class _LangChainLLM(LLMClient):
                 continue
 
             usage = _usage_from_response(raw, model_name, latency_ms, self._rates(model_name))
+            metrics.inc(
+                "opspilot_llm_cost_usd_total",
+                labels={"provider": settings.llm_provider, "purpose": purpose},
+                amount=usage.cost_usd,
+            )
             log.info(
                 "llm.call",
                 purpose=purpose,

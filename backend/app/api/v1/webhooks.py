@@ -25,6 +25,7 @@ from typing import Any
 from fastapi import APIRouter, Header, Request, Response, status
 from sqlalchemy import select
 
+from app.core import metrics
 from app.core.crypto import CryptoError, open_sealed
 from app.core.db import session_scope, set_tenant_setting
 from app.core.errors import AuthenticationError, NotFoundError, ValidationError
@@ -123,6 +124,10 @@ async def _ingest(
         actor_label=f"{integration.provider}:{integration.name}",
     )
     await session.commit()
+    metrics.inc(
+        "opspilot_webhook_ingested_total",
+        labels={"provider": str(integration.provider), "deduplicated": str(deduplicated)},
+    )
 
     if not deduplicated and payload.auto_investigate:
         await enqueue_investigation(

@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import __version__
 from app.api.v1.router import api_router
+from app.core import metrics
 from app.core.config import settings
 from app.core.db import check_database, dispose_engine
 from app.core.errors import OpsPilotError
@@ -130,6 +131,17 @@ async def request_context(request: Request, call_next):  # noqa: ANN001, ANN201
             status=response.status_code,
             ms=duration_ms,
         )
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path) if route else request.url.path
+        metrics.inc(
+            "opspilot_http_requests_total",
+            labels={
+                "route": route_path,
+                "method": request.method,
+                "status": str(response.status_code),
+            },
+        )
+        metrics.observe_latency("opspilot_http_request_seconds", (time.perf_counter() - started))
     return response
 
 
@@ -226,6 +238,15 @@ async def readiness() -> JSONResponse:
         status_code=200 if ready else 503,
         content={"ready": ready, "database": database_ok, "redis": redis_ok},
     )
+
+
+@app.get("/metrics", tags=["observability"])
+async def prometheus_metrics() -> Response:
+    """Prometheus text exposition: request rates, latencies, domain counters."""
+    from fastapi.responses import PlainTextResponse
+
+    metrics.set_gauge("opspilot_uptime_seconds", metrics.uptime_seconds())
+    return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
