@@ -18,18 +18,35 @@ services:
       -c shared_buffers=512MB
       -c work_mem=16MB
       -c log_min_duration_statement=1000
+    # NOTE: `deploy.resources` below is honoured by `docker stack deploy`
+    # (Swarm) only — plain `docker compose up` ignores it. The mem_limit/cpus
+    # keys next to it are what actually constrain the container here.
+    mem_limit: 2g
+    cpus: 2.0
     deploy:
       resources:
         limits:
           memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
   redis:
     ports: []
     restart: always
+    mem_limit: 768m
+    cpus: 1.0
     deploy:
       resources:
         limits:
           memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
   migrate:
     build:
@@ -43,6 +60,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # The backend image's HEALTHCHECK probes :8000/health/live, which neither
+    # the one-shot migrate container nor the arq worker serve — never let the
+    # orchestrator judge them by it.
+    healthcheck:
+      disable: true
     restart: "no"
 
   api:
@@ -78,6 +100,8 @@ services:
       REMEDIATION_DISABLED: ${REMEDIATION_DISABLED:-false}
     volumes: []
     restart: always
+    mem_limit: 2g
+    cpus: 2.0
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,6 +110,11 @@ services:
         limits:
           cpus: "2"
           memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
   worker:
     build:
@@ -115,17 +144,28 @@ services:
       REMEDIATION_DISABLED: ${REMEDIATION_DISABLED:-false}
     volumes: []
     restart: always
+    mem_limit: 2g
+    cpus: 2.0
+    # See migrate: the arq worker does not serve the API health endpoint.
+    healthcheck:
+      disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully
     deploy:
       # More than one worker is safe: investigations are guarded by a Redis
       # advisory lock per incident, and the LangGraph checkpointer is shared.
+      # NOTE: replicas is Swarm-only; with plain compose use --scale worker=2.
       replicas: 2
       resources:
         limits:
           cpus: "2"
           memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
   web:
     build:
@@ -135,8 +175,68 @@ services:
     environment:
       NODE_ENV: production
     restart: always
+    mem_limit: 768m
+    cpus: 1.0
+    depends_on:
+      api:
+        condition: service_healthy
     deploy:
       resources:
         limits:
           cpus: "1"
           memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  # Nightly pg_dump to a local volume. Opt-in: `docker compose --profile backup
+  # up backup`. Offload /backups to S3 on a host cron; see docs/RUNBOOK.md.
+  backup:
+    image: pgvector/pgvector:pg16
+    profiles: [backup]
+    command: >
+      sh -c 'stamp=$$(date -u +%Y%m%dT%H%M%SZ);
+      pg_dump "$DATABASE_URL" | gzip > /backups/opspilot-$${stamp}.sql.gz'
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    volumes:
+      - postgres-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # TLS-terminating reverse proxy (Caddy + automatic Let's Encrypt).
+  # Opt-in: `docker compose --profile edge up proxy`. Set DOMAIN and CONTACT_EMAIL;
+  # api/web stay on the internal network only. See docs/RUNBOOK.md.
+  proxy:
+    image: caddy:2-alpine
+    profiles: [edge]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required for the edge profile}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:?CONTACT_EMAIL is required for the edge profile}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  postgres-backups:
+  caddy-data:
+  caddy-config:
