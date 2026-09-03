@@ -20,7 +20,8 @@ COPY pyproject.toml ./
 # Installing into a venv keeps the copy into the runtime stage a single directory.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --upgrade pip setuptools wheel && pip install .
+# Floors for transitive deps with known CVEs (see Trivy gate in CI).
+RUN pip install --upgrade pip "setuptools>=78.1.1" "msgpack>=1.2.1" wheel && pip install .
 
 
 FROM python:3.12-slim AS runtime

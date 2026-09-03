@@ -194,6 +194,10 @@ jobs:
           image-ref: opspilot-api:ci
           format: table
           severity: CRITICAL,HIGH
+          # Only fail on CVEs with a published fix. Unfixed upstream issues
+          # (base-image Debian CVEs, ecdsa/Minerva) cannot gate a merge;
+          # they are tracked via pip-audit instead.
+          ignore-unfixed: true
           exit-code: "1"
 
       - name: Smoke-test the API image
