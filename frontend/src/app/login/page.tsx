@@ -10,9 +10,12 @@ export default function LoginPage() {
   const { session, loading, login, signup, error } = useAuth();
   const router = useRouter();
 
+  // Demo credentials are a development convenience only — never prefill or
+  // advertise them in a production build.
+  const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
   const [mode, setMode] = useState<"login" | "signup">("login");
-  const [email, setEmail] = useState("admin@opspilot.dev");
-  const [password, setPassword] = useState("opspilot");
+  const [email, setEmail] = useState(demoMode ? "admin@opspilot.dev" : "");
+  const [password, setPassword] = useState(demoMode ? "opspilot" : "");
   const [organization, setOrganization] = useState("");
   const [fullName, setFullName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -142,7 +145,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {mode === "login" ? (
+          {mode === "login" && demoMode ? (
             <p className="mt-4 text-center text-[11px] text-[--color-text-muted]">
               Demo seed: <code className="font-mono">admin@opspilot.dev</code> /{" "}
               <code className="font-mono">opspilot</code>
