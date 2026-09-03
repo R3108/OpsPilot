@@ -70,9 +70,7 @@ async def test_clear_requires_admin(
     await _seed(session, tenant, 2)
 
     for role in (UserRole.VIEWER, UserRole.RESPONDER, UserRole.APPROVER):
-        response = await client.delete(
-            "/api/v1/audit", headers=auth_headers_for(users[str(role)])
-        )
+        response = await client.delete("/api/v1/audit", headers=auth_headers_for(users[str(role)]))
         assert response.status_code == 403, f"{role} should not be able to clear the log"
 
     _rows, total = await audit_service.query(session, tenant_id=tenant.id)

@@ -144,9 +144,7 @@ async def clear(
     was here. Flushed but not committed; the caller owns the txn.
     """
     deleted = int(
-        (
-            await session.execute(delete(AuditLog).where(AuditLog.tenant_id == tenant_id))
-        ).rowcount
+        (await session.execute(delete(AuditLog).where(AuditLog.tenant_id == tenant_id))).rowcount
         or 0
     )
 
@@ -160,8 +158,7 @@ async def clear(
         actor_label=actor_label,
         summary=(
             f"Cleared the audit log: {deleted} "
-            f"{'entry' if deleted == 1 else 'entries'} deleted"
-            + (f" — {reason}" if reason else "")
+            f"{'entry' if deleted == 1 else 'entries'} deleted" + (f" — {reason}" if reason else "")
         ),
         before={"entry_count": deleted},
         after={"entry_count": 0},

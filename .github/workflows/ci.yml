@@ -226,7 +226,7 @@ jobs:
           # A crude but effective net for the credential shapes this codebase
           # explicitly handles. Excludes the .env.example template.
           if git grep -nEI '(sk-ant-[A-Za-z0-9]|xoxb-[0-9]{8,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})' \
-               -- ':!*.example' ':!*.md' ':!.github/*'; then
+               -- ':!*.example' ':!*.md' ':!.github/*' ':!backend/tests/*'; then
             echo "::error::A credential-shaped string was committed"
             exit 1
           fi

@@ -232,7 +232,12 @@ class PostmortemDraft(Strict):
     lessons_learned: str = Field(max_length=3000)
 
     @field_validator(
-        "summary", "impact", "root_cause", "detection", "resolution", "lessons_learned",
+        "summary",
+        "impact",
+        "root_cause",
+        "detection",
+        "resolution",
+        "lessons_learned",
         mode="before",
     )
     @classmethod
@@ -251,6 +256,7 @@ class PostmortemDraft(Strict):
         if isinstance(value, list):
             return "\n".join(f"- {str(item).strip()}" for item in value if str(item).strip())
         return value
+
     contributing_factors: list[str] = Field(default_factory=list, max_length=8)
     action_items: list[PostmortemActionItem] = Field(default_factory=list, max_length=10)
     cited_evidence_ids: list[str] = Field(default_factory=list, max_length=40)
