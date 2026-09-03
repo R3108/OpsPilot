@@ -138,6 +138,9 @@ function ApprovalCard({
   const [error, setError] = useState<string | null>(null);
 
   const pending = approval.status === "pending";
+  // Expiry is evaluated against now on each render; the parent polls, so a
+  // flipped value surfaces on the next refresh.
+  // eslint-disable-next-line react-hooks/purity
   const expired = new Date(approval.expires_at).getTime() < Date.now();
 
   async function decide(decision: "approve" | "reject") {

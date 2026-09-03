@@ -55,9 +55,7 @@ async def test_a_rescued_run_is_credited_the_time_it_spent_stranded() -> None:
         values=live.values,
         created_at=(datetime.now(UTC) - stranded_for).isoformat(),
     )
-    await investigations._credit_stranded_time(
-        graph, config, stale, incident_id=incident_id
-    )
+    await investigations._credit_stranded_time(graph, config, stale, incident_id=incident_id)
 
     resumed = await graph.aget_state(config)
     after = datetime.fromisoformat(resumed.values["deadline_at"])

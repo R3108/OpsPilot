@@ -28,7 +28,7 @@ export function useAgentStream(
 ) {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
-  const [lastHeartbeat, setLastHeartbeat] = useState<number>(Date.now());
+  const [lastHeartbeat, setLastHeartbeat] = useState<number>(() => Date.now());
   const onEventRef = useRef(onEvent);
   const seenIds = useRef<Set<string>>(new Set());
 
@@ -45,6 +45,9 @@ export function useAgentStream(
     if (!url) return;
 
     seenIds.current = new Set();
+    // Resetting the buffer when switching incidents; the setStates land after
+    // the EventSource setup, not as render cascades.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEvents([]);
     setStatus("connecting");
 
@@ -150,7 +153,8 @@ export function usePolling<T>(
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Callers pass their own dep list so one hook serves every polling page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   }, deps);
 
   useEffect(() => {

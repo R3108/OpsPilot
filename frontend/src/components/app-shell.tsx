@@ -41,7 +41,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Refresh the badge when the session arrives or the route changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (session) void refreshApprovals();
   }, [session, refreshApprovals, pathname]);
 
