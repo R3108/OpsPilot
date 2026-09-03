@@ -212,13 +212,17 @@ def test_a_self_hosted_nim_is_not_treated_as_the_hosted_catalogue() -> None:
 
 
 def _production(**overrides: Any) -> Settings:
-    return Settings(
-        environment="production",
-        secret_key="a" * 40,
-        encryption_key="k" * 44,
-        cors_origins="https://opspilot.example.com",
-        **overrides,
-    )
+    fields: dict[str, Any] = {
+        "environment": "production",
+        "secret_key": "a" * 40,
+        "encryption_key": "k" * 44,
+        "cors_origins": "https://opspilot.example.com",
+        "database_url": "postgresql+asyncpg://opspilot:secret@postgres:5432/opspilot",
+        "checkpoint_database_url": "postgresql://opspilot:secret@postgres:5432/opspilot",
+        "redis_url": "redis://redis:6379/0",
+    }
+    fields.update(overrides)
+    return Settings(**fields)
 
 
 def test_production_requires_a_key_for_the_hosted_nim_catalogue() -> None:
@@ -240,6 +244,13 @@ def test_production_does_not_demand_an_anthropic_key_when_running_on_nim() -> No
         nvidia_api_key="nvapi-test",
         anthropic_api_key="",
     ).validate_production()
+
+
+def test_production_rejects_localhost_data_urls() -> None:
+    with pytest.raises(RuntimeError, match="DATABASE_URL must not point at localhost"):
+        _production(
+            database_url="postgresql+asyncpg://opspilot:x@localhost:5432/opspilot"
+        ).validate_production()
 
 
 def test_module_exposes_the_providers_registry() -> None:
