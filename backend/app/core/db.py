@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -121,6 +123,43 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
+
+@asynccontextmanager
+async def tenant_session_scope(tenant_id: uuid.UUID) -> AsyncIterator[AsyncSession]:
+    """Like :func:`session_scope`, but pins the Postgres RLS tenant setting.
+
+    The ``0002`` migration enables ``FORCE ROW LEVEL SECURITY`` keyed on
+    ``current_setting('opspilot.tenant_id')``. Without ``SET LOCAL`` every
+    tenant-scoped query returns zero rows on Postgres; this sets it for the
+    transaction so the policy sees the right tenant. A no-op on other dialects
+    (sqlite in tests), where RLS does not exist.
+    """
+    async with session_scope() as session:
+        await set_tenant_setting(session, tenant_id)
+        yield session
+
+
+async def set_tenant_setting(session: AsyncSession, tenant_id: uuid.UUID) -> None:
+    """Pin ``opspilot.tenant_id`` for the current transaction (Postgres only)."""
+    bind = session.bind
+    dialect = bind.dialect.name if bind is not None else ""
+    if dialect != "postgresql":
+        return
+    await session.execute(text("SET LOCAL opspilot.tenant_id = :tid"), {"tid": str(tenant_id)})
+
+
+async def clear_tenant_setting(session: AsyncSession) -> None:
+    """Clear ``opspilot.tenant_id`` so the session sees every tenant.
+
+    Reserved for cross-tenant system work (cron sweeps, CLI admin). Request and
+    job paths must use :func:`tenant_session_scope` instead.
+    """
+    bind = session.bind
+    dialect = bind.dialect.name if bind is not None else ""
+    if dialect != "postgresql":
+        return
+    await session.execute(text("RESET opspilot.tenant_id"))
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

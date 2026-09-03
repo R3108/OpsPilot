@@ -19,7 +19,7 @@ from app.agents.runtime import (
     set_phase,
 )
 from app.agents.state import InvestigationState
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.logging import get_logger
 from app.models.enums import (
     AgentEventType,
@@ -45,7 +45,7 @@ async def triage_node(state: InvestigationState) -> dict[str, Any]:
     ) as step:
         await set_phase(state, AgentPhase.TRIAGE)
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await load_incident(session, incident_id)
             snapshot = incident_snapshot(incident)
             similar = await recent_incidents_for_service(
@@ -66,7 +66,7 @@ async def triage_node(state: InvestigationState) -> dict[str, Any]:
 
         severity = IncidentSeverity(result.severity)
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await load_incident(session, incident_id)
             incident.severity = severity
             incident.severity_rationale = result.rationale

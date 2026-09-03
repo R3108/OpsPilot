@@ -92,6 +92,23 @@ async def test_alertmanager_webhook_creates_an_incident(
     assert incident.namespace == "payments"
 
 
+async def test_malformed_json_is_rejected_with_400_not_500(
+    client: AsyncClient, session: AsyncSession, tenant: Tenant
+) -> None:
+    integration = await make_integration(session, tenant, IntegrationProvider.PROMETHEUS)
+    body = b"{not valid json"
+
+    response = await client.post(
+        f"/api/v1/webhooks/alertmanager/{integration.id}",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-OpsPilot-Signature": sign_payload(body, SECRET),
+        },
+    )
+    assert response.status_code == 422, response.text
+
+
 async def test_bad_signature_is_rejected(
     client: AsyncClient, session: AsyncSession, tenant: Tenant
 ) -> None:

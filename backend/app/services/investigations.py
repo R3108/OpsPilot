@@ -18,7 +18,7 @@ from app.agents.graph import get_compiled_graph, thread_config
 from app.agents.runtime import incident_snapshot
 from app.agents.state import initial_state
 from app.core.config import settings
-from app.core.db import session_scope
+from app.core.db import session_scope, set_tenant_setting, tenant_session_scope
 from app.core.errors import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.core.redis_client import advisory_lock
@@ -53,7 +53,7 @@ async def start_investigation(
                 details={"incident_id": str(incident_id)},
             )
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await session.get(Incident, incident_id)
             if incident is None or incident.tenant_id != tenant_id:
                 raise NotFoundError("Incident not found")
@@ -155,7 +155,7 @@ async def resume_investigation(
                 details={"incident_id": str(incident_id)},
             )
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             run = (
                 await session.execute(
                     select(AgentRun)
@@ -231,7 +231,7 @@ async def _drive(
             phase=AgentPhase.FAILED,
             error=f"{type(exc).__name__}: {exc}"[:4000],
         )
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await session.get(Incident, incident_id)
             if incident is not None and incident.status.is_active:
                 incident.status = IncidentStatus.FAILED
@@ -275,7 +275,7 @@ async def _drive(
         phase=AgentPhase.DONE,
         result=_public_state(final_state),
     )
-    async with session_scope() as session:
+    async with tenant_session_scope(tenant_id) as session:
         await audit.record(
             session,
             tenant_id=tenant_id,
@@ -380,6 +380,9 @@ async def _finish_run(
         run = await session.get(AgentRun, run_id)
         if run is None:  # pragma: no cover
             return
+        # The RLS policy needs a tenant for this transaction; the run row itself
+        # is the authority on which tenant it belongs to.
+        await set_tenant_setting(session, run.tenant_id)
         run.status = status
         run.phase = phase
         run.error = error

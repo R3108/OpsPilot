@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.core.db import session_scope
+from app.core.db import clear_tenant_setting, session_scope, tenant_session_scope
 from app.core.logging import get_logger, request_id_ctx, tenant_id_ctx
 from app.models.enums import AgentPhase, ApprovalStatus, IntegrationStatus
 from app.models.integration import Integration
@@ -58,7 +58,8 @@ async def resume_investigation(ctx: Any, incident_id: str, tenant_id: str) -> di
     tenant_id_ctx.set(tenant_id)
 
     incident_uuid = uuid.UUID(incident_id)
-    async with session_scope() as session:
+    tenant_uuid = uuid.UUID(tenant_id)
+    async with tenant_session_scope(tenant_uuid) as session:
         pending = await approval_service.outstanding_for_incident(session, incident_uuid)
         if pending:
             log.info(
@@ -155,7 +156,10 @@ async def check_integration_health(ctx: Any, integration_id: str) -> dict[str, A
 # --------------------------------------------------------------------------
 async def expire_approvals(ctx: Any) -> dict[str, Any]:
     """Sweep timed-out approvals and unpark the graphs waiting on them."""
+    # Cross-tenant system sweep: bypass RLS rather than iterating tenants, so a
+    # large tenant count does not turn this into N transactions.
     async with session_scope() as session:
+        await clear_tenant_setting(session)
         count = await approval_service.expire_stale(session)
         if not count:
             return {"expired": 0}
@@ -171,8 +175,8 @@ async def expire_approvals(ctx: Any) -> dict[str, Any]:
         )
 
     for incident_id, tenant_id in stale:
-        async with session_scope() as session:
-            if await approval_service.outstanding_for_incident(session, incident_id):
+        async with tenant_session_scope(tenant_id) as scoped:
+            if await approval_service.outstanding_for_incident(scoped, incident_id):
                 continue
         await resume_investigation(ctx, str(incident_id), str(tenant_id))
 
@@ -180,7 +184,9 @@ async def expire_approvals(ctx: Any) -> dict[str, Any]:
 
 
 async def health_check_all_integrations(ctx: Any) -> dict[str, Any]:
+    # Cross-tenant sweep: see expire_approvals.
     async with session_scope() as session:
+        await clear_tenant_setting(session)
         ids = list(
             (await session.execute(select(Integration.id).where(Integration.is_enabled.is_(True))))
             .scalars()
@@ -204,7 +210,9 @@ async def reconcile_stuck_investigations(ctx: Any) -> dict[str, Any]:
     from app.models.incident import AgentRun
 
     cutoff = datetime.now(UTC) - timedelta(seconds=settings.investigation_timeout_seconds * 2)
+    # Cross-tenant sweep: see expire_approvals.
     async with session_scope() as session:
+        await clear_tenant_setting(session)
         stuck = list(
             (
                 await session.execute(
@@ -222,7 +230,7 @@ async def reconcile_stuck_investigations(ctx: Any) -> dict[str, Any]:
     resumed = 0
     superseded = 0
     for run in stuck:
-        async with session_scope() as session:
+        async with tenant_session_scope(run.tenant_id) as session:
             # The graph thread is keyed by incident, not by run, so a "running"
             # row from an attempt that a later one replaced has nothing of its own
             # left to resume. Resuming would pick up the newest run instead and

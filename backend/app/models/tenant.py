@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, Enum, String, UniqueConstraint
+from sqlalchemy import Boolean, Enum, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import Uuid
 
 from app.models.base import (
     Base,
@@ -90,3 +92,25 @@ class ApiKey(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     tenant: Mapped[Tenant] = relationship(lazy="joined")
+
+
+class RefreshToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One outstanding refresh token per login session.
+
+    Rotation: every ``POST /auth/refresh`` marks the presented token used and
+    mints a fresh one, so a stolen refresh token is useful at most until the
+    legitimate client refreshes once — at which point reuse is detected and the
+    whole family is revoked. ``POST /auth/logout`` revokes without minting.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    replaced_by_jti: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

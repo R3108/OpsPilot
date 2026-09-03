@@ -122,6 +122,11 @@ def hash_api_key(full_key: str) -> str:
     return hashlib.sha256(f"{settings.secret_key}:{full_key}".encode()).hexdigest()
 
 
+def hash_refresh_token(raw_token: str) -> str:
+    """Store only the hash, so a database read does not yield live sessions."""
+    return hashlib.sha256(f"{settings.secret_key}:refresh:{raw_token}".encode()).hexdigest()
+
+
 def parse_api_key_prefix(full_key: str) -> str | None:
     parts = full_key.split("_", 2)
     if len(parts) != 3 or parts[0] != API_KEY_PREFIX:

@@ -17,16 +17,19 @@ from app.api.deps import (
     rate_limit,
 )
 from app.core.config import settings
-from app.core.errors import AuthenticationError, ConflictError, NotFoundError
+from app.core.errors import AuthenticationError, ConflictError, NotFoundError, RateLimitedError
+from app.core.logging import get_logger
+from app.core.redis_client import rate_limit_ok
 from app.core.security import (
     create_token,
     decode_token,
     generate_api_key,
     hash_password,
+    hash_refresh_token,
     verify_password,
 )
 from app.models.enums import AuditAction, TenantPlan, UserRole
-from app.models.tenant import ApiKey, Tenant, User
+from app.models.tenant import ApiKey, RefreshToken, Tenant, User
 from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyCreated,
@@ -46,17 +49,48 @@ from app.services import audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+log = get_logger(__name__)
+
 
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return (slug or "org")[:60]
 
 
-def _tokens(user: User) -> TokenPair:
+async def _check_anonymous_rate_limit(request: Request, *, scope: str) -> None:
+    """IP-based throttle for the unauthenticated auth endpoints.
+
+    The principal-based ``rate_limit`` dependency cannot protect routes that
+    have no principal yet; without this, login/signup/refresh accept unlimited
+    credential-stuffing and signup-spam traffic.
+    """
+    ip = client_ip(request) or "unknown"
+    ok, count = await rate_limit_ok(f"auth:{scope}:{ip}", limit=10, window_seconds=60)
+    if not ok:
+        raise RateLimitedError(
+            "Too many attempts; try again in a minute",
+            details={"scope": scope, "observed": count},
+        )
+
+
+async def _mint_tokens(session: DbSession, user: User) -> TokenPair:
+    """Issue a pair and record the refresh token for rotation/revocation."""
     common = {"subject": str(user.id), "tenant_id": str(user.tenant_id), "role": str(user.role)}
+    refresh = create_token(**common, token_type="refresh")
+    claims = decode_token(refresh, expected_type="refresh")
+    session.add(
+        RefreshToken(
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            jti=claims["jti"],
+            token_hash=hash_refresh_token(refresh),
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
+        )
+    )
+    await session.flush()
     return TokenPair(
         access_token=create_token(**common, token_type="access"),
-        refresh_token=create_token(**common, token_type="refresh"),
+        refresh_token=refresh,
         expires_in=settings.access_token_ttl_minutes * 60,
     )
 
@@ -64,6 +98,7 @@ def _tokens(user: User) -> TokenPair:
 @router.post("/signup", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
 async def signup(payload: SignupRequest, request: Request, session: DbSession) -> TokenPair:
     """Create an organisation and its first OWNER."""
+    await _check_anonymous_rate_limit(request, scope="signup")
     base_slug = _slugify(payload.organization_name)
     slug = base_slug
     for suffix in range(1, 100):
@@ -104,11 +139,12 @@ async def signup(payload: SignupRequest, request: Request, session: DbSession) -
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    return _tokens(user)
+    return await _mint_tokens(session, user)
 
 
 @router.post("/login", response_model=TokenPair, dependencies=[])
 async def login(payload: LoginRequest, request: Request, session: DbSession) -> TokenPair:
+    await _check_anonymous_rate_limit(request, scope="login")
     stmt = select(User).where(User.email == payload.email.lower())
     if payload.tenant_slug:
         stmt = stmt.join(Tenant).where(Tenant.slug == payload.tenant_slug)
@@ -156,16 +192,84 @@ async def login(payload: LoginRequest, request: Request, session: DbSession) -> 
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    return _tokens(candidate)
+    return await _mint_tokens(session, candidate)
 
 
 @router.post("/refresh", response_model=TokenPair)
-async def refresh(payload: RefreshRequest, session: DbSession) -> TokenPair:
+async def refresh(payload: RefreshRequest, request: Request, session: DbSession) -> TokenPair:
+    await _check_anonymous_rate_limit(request, scope="refresh")
     claims = decode_token(payload.refresh_token, expected_type="refresh")
+
+    stored = (
+        await session.execute(select(RefreshToken).where(RefreshToken.jti == claims.get("jti")))
+    ).scalar_one_or_none()
+    if stored is None:
+        raise AuthenticationError("Refresh token is no longer valid")
+    if stored.revoked_at is not None:
+        # A rotated-out token presented again means the family leaked: burn
+        # every outstanding token for this user so the thief's copy dies too.
+        if stored.replaced_by_jti is not None and stored.token_hash == hash_refresh_token(
+            payload.refresh_token
+        ):
+            await _revoke_user_tokens(session, stored.user_id)
+        raise AuthenticationError("Refresh token is no longer valid")
+    if stored.token_hash != hash_refresh_token(payload.refresh_token):
+        raise AuthenticationError("Refresh token is no longer valid")
+    if stored.expires_at < datetime.now(UTC):
+        stored.revoked_at = datetime.now(UTC)
+        raise AuthenticationError("Refresh token has expired")
+
     user = await session.get(User, uuid.UUID(claims["sub"]))
-    if user is None or not user.is_active:
+    tenant = await session.get(Tenant, uuid.UUID(claims["tid"])) if user else None
+    if user is None or not user.is_active or tenant is None or not tenant.is_active:
         raise AuthenticationError("User not found or deactivated")
-    return _tokens(user)
+    if str(user.tenant_id) != claims["tid"] or stored.user_id != user.id:
+        raise AuthenticationError("Token does not match the user's organisation")
+
+    # Rotate: burn the presented token, mint a fresh pair. If the burned token
+    # is presented again it hits the revoked branch above; if a *rotated-out*
+    # token is presented, the whole family is revoked below.
+    stored.revoked_at = datetime.now(UTC)
+    stored.last_used_at = datetime.now(UTC)
+    pair = await _mint_tokens(session, user)
+    new_claims = decode_token(pair.refresh_token, expected_type="refresh")
+    stored.replaced_by_jti = new_claims["jti"]
+    return pair
+
+
+async def _revoke_user_tokens(session: DbSession, user_id: uuid.UUID) -> None:
+    """Burn every outstanding refresh token for a user (reuse detected)."""
+    rows = list(
+        (
+            await session.execute(
+                select(RefreshToken).where(
+                    RefreshToken.user_id == user_id,
+                    RefreshToken.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(UTC)
+    for row in rows:
+        row.revoked_at = now
+    log.warning("auth.refresh_reuse_detected", user_id=str(user_id), revoked=len(rows))
+
+
+@router.post("/logout", response_model=Acknowledgement)
+async def logout(payload: RefreshRequest, session: DbSession) -> Acknowledgement:
+    """Revoke one refresh token without minting a replacement."""
+    try:
+        claims = decode_token(payload.refresh_token, expected_type="refresh")
+    except AuthenticationError:
+        return Acknowledgement(message="Signed out")
+    stored = (
+        await session.execute(select(RefreshToken).where(RefreshToken.jti == claims.get("jti")))
+    ).scalar_one_or_none()
+    if stored is not None and stored.token_hash == hash_refresh_token(payload.refresh_token):
+        stored.revoked_at = datetime.now(UTC)
+    return Acknowledgement(message="Signed out")
 
 
 @router.get("/session", response_model=SessionOut)

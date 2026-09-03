@@ -26,8 +26,8 @@ from fastapi import APIRouter, Header, Request, Response, status
 from sqlalchemy import select
 
 from app.core.crypto import CryptoError, open_sealed
-from app.core.db import session_scope
-from app.core.errors import AuthenticationError, NotFoundError
+from app.core.db import session_scope, set_tenant_setting
+from app.core.errors import AuthenticationError, NotFoundError, ValidationError
 from app.core.logging import get_logger, tenant_id_ctx
 from app.core.redis_client import claim_once, rate_limit_ok
 from app.core.security import (
@@ -66,7 +66,19 @@ async def _load_integration(session, integration_id: uuid.UUID, provider: Integr
     if not integration.is_enabled:
         raise NotFoundError("This integration is disabled")
     tenant_id_ctx.set(str(integration.tenant_id))
+    await set_tenant_setting(session, integration.tenant_id)
     return integration
+
+
+def _parse_json_body(body: bytes) -> dict[str, Any]:
+    """Parse a webhook delivery, rejecting malformed JSON with a 400."""
+    try:
+        data = json.loads(body or b"{}")
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"Malformed webhook payload: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise ValidationError("Malformed webhook payload: expected a JSON object")
+    return data
 
 
 def _webhook_secret(integration: Integration) -> str:
@@ -148,7 +160,7 @@ async def alertmanager_webhook(
             log.warning("webhook.bad_signature", provider="alertmanager")
             raise AuthenticationError("Invalid webhook signature")
 
-        data = json.loads(body or b"{}")
+        data = _parse_json_body(body)
         firing = [a for a in data.get("alerts", []) if a.get("status") == "firing"]
         if not firing:
             return WebhookIngestResult(accepted=True, reason="no firing alerts in this delivery")
@@ -197,7 +209,7 @@ async def grafana_webhook(
         if not verify_hmac_signature(body, x_opspilot_signature, _webhook_secret(integration)):
             raise AuthenticationError("Invalid webhook signature")
 
-        data = json.loads(body or b"{}")
+        data = _parse_json_body(body)
         alerts = data.get("alerts") or []
         firing = [a for a in alerts if a.get("status") == "firing"] or alerts
         if not firing:
@@ -248,7 +260,7 @@ async def cloudwatch_webhook(
         if not verify_hmac_signature(body, x_opspilot_signature, _webhook_secret(integration)):
             raise AuthenticationError("Invalid webhook signature")
 
-        envelope = json.loads(body or b"{}")
+        envelope = _parse_json_body(body)
         if envelope.get("Type") == "SubscriptionConfirmation":
             # Confirming is a deliberate manual step; surface the URL instead of
             # auto-confirming a subscription we did not ask for.
@@ -264,7 +276,10 @@ async def cloudwatch_webhook(
             )
 
         try:
-            alarm = json.loads(envelope.get("Message") or "{}")
+            raw_message = envelope.get("Message") or "{}"
+            alarm = json.loads(raw_message) if isinstance(raw_message, str) else raw_message
+            if not isinstance(alarm, dict):
+                alarm = {"AlarmName": envelope.get("Subject", "CloudWatch alarm")}
         except json.JSONDecodeError:
             alarm = {"AlarmName": envelope.get("Subject", "CloudWatch alarm")}
 
@@ -325,7 +340,7 @@ async def github_webhook(
             log.warning("webhook.bad_signature", provider="github")
             raise AuthenticationError("Invalid webhook signature")
 
-        data = json.loads(body or b"{}")
+        data = _parse_json_body(body)
         repo = (data.get("repository") or {}).get("full_name", "unknown")
 
         if x_github_event == "deployment_status":
@@ -415,10 +430,16 @@ async def slack_webhook(
 
             form = {k: v[0] for k, v in parse_qs(body.decode()).items()}
             if "payload" in form:
-                return await _slack_interaction(session, integration, json.loads(form["payload"]))
+                try:
+                    interaction = json.loads(form["payload"])
+                except json.JSONDecodeError as exc:
+                    raise ValidationError("Malformed Slack interaction payload") from exc
+                if not isinstance(interaction, dict):
+                    raise ValidationError("Malformed Slack interaction payload")
+                return await _slack_interaction(session, integration, interaction)
             return await _slack_command(session, integration, form)
 
-        data = json.loads(body or b"{}")
+        data = _parse_json_body(body)
         if data.get("type") == "url_verification":
             return {"challenge": data.get("challenge")}
         return {"ok": True}

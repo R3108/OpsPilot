@@ -140,4 +140,10 @@ async def enqueue_resume(*, incident_id: uuid.UUID, tenant_id: uuid.UUID) -> str
 
 
 async def enqueue_integration_health_check(*, integration_id: uuid.UUID) -> str | None:
-    return await _enqueue("check_integration_health", str(integration_id))
+    return await _enqueue(
+        "check_integration_health",
+        str(integration_id),
+        # A stable id: rapid integration edits collapse into one queued check
+        # rather than flooding the worker.
+        job_id=f"health:{integration_id}",
+    )

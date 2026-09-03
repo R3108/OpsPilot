@@ -23,6 +23,7 @@ from app.core.errors import OpsPilotError
 from app.core.logging import (
     configure_logging,
     get_logger,
+    incident_id_ctx,
     request_id_ctx,
     tenant_id_ctx,
     user_id_ctx,
@@ -104,6 +105,7 @@ async def request_context(request: Request, call_next):  # noqa: ANN001, ANN201
     request_id_ctx.set(request_id)
     tenant_id_ctx.set(None)
     user_id_ctx.set(None)
+    incident_id_ctx.set(None)
 
     started = time.perf_counter()
     try:

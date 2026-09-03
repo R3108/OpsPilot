@@ -26,7 +26,7 @@ from app.agents.runtime import (
     valid_citations,
 )
 from app.agents.state import InvestigationState
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.logging import get_logger
 from app.models.enums import (
     AgentEventType,
@@ -57,7 +57,7 @@ async def postmortem_node(state: InvestigationState) -> dict[str, Any]:
 
         digests = await load_evidence_digests(incident_id)
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await session.get(Incident, incident_id)
             if incident is None:
                 raise LookupError("incident disappeared before postmortem")
@@ -163,7 +163,7 @@ async def postmortem_node(state: InvestigationState) -> dict[str, Any]:
             draft, snapshot, timeline, actions, digests, cited, verification, metrics
         )
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             existing = (
                 await session.execute(
                     select(Postmortem).where(Postmortem.incident_id == incident_id)
