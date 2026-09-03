@@ -7,13 +7,13 @@ are: who is allowed to call it, that it actually deletes, that it leaves the
 
 from __future__ import annotations
 
+from conftest import auth_headers_for
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import AuditAction, UserRole
 from app.models.tenant import Tenant, User
 from app.services import audit as audit_service
-from tests.conftest import auth_headers_for
 
 
 async def _seed(session: AsyncSession, tenant: Tenant, count: int) -> None:

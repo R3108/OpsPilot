@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 
+from conftest import auth_headers_for
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import UserRole
 from app.models.tenant import User
-from tests.conftest import auth_headers_for
 
 
 async def test_signup_creates_tenant_and_owner(client: AsyncClient) -> None:
