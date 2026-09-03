@@ -87,6 +87,7 @@ async def start_investigation(
                 phase=AgentPhase.TRIAGE,
                 status="running",
                 started_at=datetime.now(UTC),
+                last_heartbeat_at=datetime.now(UTC),
             )
             session.add(run)
             await session.flush()

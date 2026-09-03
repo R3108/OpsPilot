@@ -367,6 +367,7 @@ async def record_usage(run_id: uuid.UUID, usage: Any) -> None:
         run.prompt_tokens += usage.prompt_tokens
         run.completion_tokens += usage.completion_tokens
         run.cost_usd = round(run.cost_usd + usage.cost_usd, 6)
+        run.last_heartbeat_at = datetime.now(UTC)
 
 
 async def bump_tool_calls(run_id: uuid.UUID, count: int = 1) -> None:
@@ -375,6 +376,7 @@ async def bump_tool_calls(run_id: uuid.UUID, count: int = 1) -> None:
         if run is not None:
             await set_tenant_setting(session, run.tenant_id)
             run.tool_call_count += count
+            run.last_heartbeat_at = datetime.now(UTC)
 
 
 async def set_phase(state: InvestigationState, phase: AgentPhase) -> None:
@@ -383,6 +385,7 @@ async def set_phase(state: InvestigationState, phase: AgentPhase) -> None:
         if run is not None:
             await set_tenant_setting(session, run.tenant_id)
             run.phase = phase
+            run.last_heartbeat_at = datetime.now(UTC)
 
 
 async def add_timeline(

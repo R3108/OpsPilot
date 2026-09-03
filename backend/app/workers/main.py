@@ -57,7 +57,7 @@ class WorkerSettings:
     ]
     cron_jobs = [
         cron(expire_approvals, minute=set(range(0, 60, 2)), run_at_startup=False),
-        cron(reconcile_stuck_investigations, minute={5, 20, 35, 50}),
+        cron(reconcile_stuck_investigations, minute=set(range(0, 60, 5))),
         cron(health_check_all_integrations, minute={0, 30}),
     ]
 

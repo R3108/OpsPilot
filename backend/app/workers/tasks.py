@@ -8,6 +8,7 @@ the UI rather than only in a log.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.db import clear_tenant_setting, session_scope, tenant_session_scope
+from app.core.errors import IntegrationError, IntegrationTimeoutError
 from app.core.logging import get_logger, request_id_ctx, tenant_id_ctx
 from app.models.enums import AgentPhase, ApprovalStatus, IntegrationStatus
 from app.models.integration import Integration
@@ -23,6 +25,29 @@ from app.services import approvals as approval_service
 from app.services import investigations
 
 log = get_logger(__name__)
+
+# Failures worth an arq redrive with backoff: transient infra, not domain
+# errors. The graph checkpoint makes a redrive resume-safe; a domain error
+# (policy, approval, not-found) would fail identically on retry.
+_TRANSIENT_ERRORS = (IntegrationError, IntegrationTimeoutError, ConnectionError, TimeoutError)
+
+try:
+    from sqlalchemy.exc import DBAPIError, OperationalError
+
+    _TRANSIENT_ERRORS = (*_TRANSIENT_ERRORS, DBAPIError, OperationalError)
+except ImportError:  # pragma: no cover
+    pass
+
+
+def _maybe_retry(ctx: Any, exc: Exception, *, max_tries: int = 3) -> None:
+    """Raise arq.Retry for transient failures until attempts run out."""
+    from arq import Retry
+
+    if not isinstance(exc, _TRANSIENT_ERRORS):
+        return
+    job_try = (ctx or {}).get("job_try", 1) if isinstance(ctx, dict) else 1
+    if job_try < max_tries:
+        raise Retry(defer=30 * job_try)
 
 
 async def run_investigation(
@@ -48,6 +73,7 @@ async def run_investigation(
         log.info("job.investigation_already_running", incident_id=incident_id)
         return {"status": "already_running"}
     except Exception as exc:  # noqa: BLE001 - already recorded on the run row
+        _maybe_retry(ctx, exc)
         log.error("job.investigation_failed", incident_id=incident_id, error=str(exc)[:500])
         return {"status": "failed", "error": str(exc)[:500]}
 
@@ -99,17 +125,20 @@ async def resume_investigation(ctx: Any, incident_id: str, tenant_id: str) -> di
     except investigations.InvestigationBusy:
         return {"status": "already_running"}
     except Exception as exc:  # noqa: BLE001
+        _maybe_retry(ctx, exc)
         log.error("job.resume_failed", incident_id=incident_id, error=str(exc)[:500])
         return {"status": "failed", "error": str(exc)[:500]}
 
 
 async def check_integration_health(ctx: Any, integration_id: str) -> dict[str, Any]:
+    from app.core.db import set_tenant_setting
     from app.integrations.base import build_client
 
     async with session_scope() as session:
         integration = await session.get(Integration, uuid.UUID(integration_id))
         if integration is None:
             return {"status": "not_found"}
+        await set_tenant_setting(session, integration.tenant_id)
 
         client = None
         try:
@@ -192,24 +221,37 @@ async def health_check_all_integrations(ctx: Any) -> dict[str, Any]:
             .scalars()
             .all()
         )
-    for integration_id in ids:
-        await check_integration_health(ctx, str(integration_id))
+    # Bounded parallelism: one slow provider must not block the rest, and an
+    # unbounded fan-out must not exhaust the DB pool.
+    semaphore = asyncio.Semaphore(5)
+
+    async def _one(integration_id: uuid.UUID) -> None:
+        async with semaphore:
+            await check_integration_health(ctx, str(integration_id))
+
+    await asyncio.gather(*(_one(i) for i in ids))
     return {"checked": len(ids)}
 
 
 async def reconcile_stuck_investigations(ctx: Any) -> dict[str, Any]:
     """Safety net for runs whose worker died mid-flight.
 
-    A run that has been ``running`` for longer than the investigation timeout,
-    with no pending approvals, is resumed; the checkpointer means it picks up
-    where it stopped rather than starting over.
+    A ``running`` run whose last heartbeat is older than the cutoff, with no
+    pending approvals, is resumed; the checkpointer means it picks up where it
+    stopped rather than starting over. The heartbeat (stamped on every phase
+    change, step and usage update) keeps slow-but-alive runs out of the sweep;
+    runs that predate heartbeats fall back to ``started_at``.
     """
     from datetime import timedelta
+
+    from sqlalchemy import or_
 
     from app.core.config import settings
     from app.models.incident import AgentRun
 
-    cutoff = datetime.now(UTC) - timedelta(seconds=settings.investigation_timeout_seconds * 2)
+    cutoff = datetime.now(UTC) - timedelta(
+        seconds=int(settings.investigation_timeout_seconds * 1.25)
+    )
     # Cross-tenant sweep: see expire_approvals.
     async with session_scope() as session:
         await clear_tenant_setting(session)
@@ -218,8 +260,12 @@ async def reconcile_stuck_investigations(ctx: Any) -> dict[str, Any]:
                 await session.execute(
                     select(AgentRun).where(
                         AgentRun.status == "running",
-                        AgentRun.started_at < cutoff,
                         AgentRun.finished_at.is_(None),
+                        or_(
+                            AgentRun.last_heartbeat_at.is_(None),
+                            AgentRun.last_heartbeat_at < cutoff,
+                        ),
+                        AgentRun.started_at < cutoff,
                     )
                 )
             )

@@ -30,6 +30,9 @@ HEALTH_CHECK_KEY = f"{QUEUE_NAME}{health_check_key_suffix}"
 
 _pool: ArqRedis | None = None
 _background_tasks: set[asyncio.Task[Any]] = set()
+# Inline fallback is a last resort, not a second worker pool: cap concurrent
+# in-process jobs so a Redis outage degrades instead of OOMing the API.
+_inline_semaphore = asyncio.Semaphore(2)
 
 
 def redis_settings() -> RedisSettings:
@@ -65,7 +68,9 @@ async def _worker_alive(pool: ArqRedis) -> bool:
         return bool(await pool.exists(HEALTH_CHECK_KEY))
     except Exception as exc:  # noqa: BLE001 - a probe must never block the enqueue
         log.warning("queue.health_probe_failed", error=str(exc)[:300])
-        return True
+        # Fail toward inline execution: a flapping probe must not park jobs on
+        # a queue that may have no worker draining it.
+        return False
 
 
 async def _enqueue(job: str, *args: Any, job_id: str | None = None, **kwargs: Any) -> str | None:
@@ -96,12 +101,25 @@ def _run_inline(job: str, *args: Any, **kwargs: Any) -> str | None:
         log.error("queue.unknown_job", job=job)
         return None
 
+    if len(_background_tasks) >= 2:
+        log.error(
+            "queue.inline_saturated",
+            job=job,
+            detail="Inline fallback is full; dropping the job rather than OOMing the API.",
+        )
+        return None
+
     log.warning(
         "queue.running_inline",
         job=job,
         detail="No arq worker reachable; running in the API process. Jobs will be lost on restart.",
     )
-    task = asyncio.create_task(fn(None, *args, **kwargs))
+
+    async def _guarded() -> None:
+        async with _inline_semaphore:
+            await fn(None, *args, **kwargs)
+
+    task = asyncio.create_task(_guarded())
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return None

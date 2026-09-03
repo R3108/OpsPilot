@@ -164,8 +164,19 @@ async def auth_client(client: AsyncClient) -> AsyncIterator[AsyncClient]:
 async def cleanup() -> AsyncIterator[None]:
     yield
     await dispose_engine()
+    import gc
+
+    gc.collect()
     for suffix in ("", "-wal", "-shm"):
-        pathlib.Path(str(_TEST_DB) + suffix).unlink(missing_ok=True)
+        path = pathlib.Path(str(_TEST_DB) + suffix)
+        # Windows holds the file briefly after the pool closes; retry rather
+        # than failing teardown on a locked file.
+        for _ in range(10):
+            try:
+                path.unlink(missing_ok=True)
+                break
+            except PermissionError:
+                await asyncio.sleep(0.2)
 
 
 def auth_headers_for(user: User) -> dict[str, str]:

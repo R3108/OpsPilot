@@ -1,9 +1,12 @@
-"""Refresh-token rotation and revocation.
+"""Refresh-token rotation and run heartbeats.
 
 Adds ``refresh_tokens``: one row per outstanding refresh token, so
 ``POST /auth/refresh`` can rotate (mark used, mint fresh) and detect reuse,
 and ``POST /auth/logout`` can revoke. Includes the tenant-isolation RLS policy
 for the new table, matching the ``0002`` hardening.
+
+Also adds ``agent_runs.last_heartbeat_at`` so the stuck-run reconciler can tell
+a dead worker from a slow-but-alive run.
 
 Revision ID: 0004
 Revises: 0003
@@ -56,19 +59,27 @@ def upgrade() -> None:
                 )
             """
         )
+        op.add_column(
+            "agent_runs", sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True)
+        )
     else:
         from app.models import Base
 
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["refresh_tokens"]])
+        op.add_column(
+            "agent_runs", sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True)
+        )
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
+        op.drop_column("agent_runs", "last_heartbeat_at")
         op.execute("DROP POLICY IF EXISTS refresh_tokens_tenant_isolation ON refresh_tokens")
         op.drop_index("ix_refresh_tokens_jti", table_name="refresh_tokens")
         op.drop_index("ix_refresh_tokens_user_id", table_name="refresh_tokens")
         op.drop_index("ix_refresh_tokens_tenant_id", table_name="refresh_tokens")
         op.drop_table("refresh_tokens")
     else:
+        op.drop_column("agent_runs", "last_heartbeat_at")
         op.drop_table("refresh_tokens")
