@@ -14,7 +14,7 @@ from typing import Any
 
 from app.agents.runtime import add_timeline, agent_step, set_phase
 from app.agents.state import InvestigationState
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.logging import get_logger
 from app.integrations.base import ClientRegistry
 from app.models.enums import (
@@ -78,7 +78,7 @@ async def verify_node(state: InvestigationState) -> dict[str, Any]:
             evaluated = await _evaluate_checks(state, checks)
             outcome, summary = _judge(evaluated)
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             session.add(
                 Verification(
                     tenant_id=tenant_id,
@@ -161,14 +161,14 @@ async def _evaluate_checks(
     incident_id = uuid.UUID(state["incident_id"])
 
     evaluated: list[dict[str, Any]] = []
-    async with session_scope() as session:
+    async with tenant_session_scope(tenant_id) as session:
         incident = await session.get(Incident, incident_id)
 
     registry = ClientRegistry(
         tenant_id, scenario=(incident.labels or {}).get("scenario") if incident else None
     )
     try:
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             await registry.load(
                 session,
                 providers={IntegrationProvider.PROMETHEUS, IntegrationProvider.CLOUDWATCH},

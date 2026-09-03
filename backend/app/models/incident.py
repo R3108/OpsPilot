@@ -320,6 +320,10 @@ class AgentRun(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     started_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Last progress signal (phase change, step, usage). The stuck-run
+    # reconciler rescues runs whose heartbeat is older than the cutoff — a
+    # slow-but-alive run keeps beating and is left alone.
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 

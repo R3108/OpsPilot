@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import metrics
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.models.enums import (
@@ -140,6 +141,7 @@ async def resolve(
 
     # 3. record the decision
     approved = decision == "approve"
+    metrics.inc("opspilot_approvals_decided_total", labels={"decision": decision})
     approval.status = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
     approval.decided_at = datetime.now(UTC)
     approval.decided_by_id = user.id

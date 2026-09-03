@@ -16,7 +16,7 @@ from app.agents.runtime import (
     set_phase,
 )
 from app.agents.state import InvestigationState
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.logging import get_logger
 from app.integrations.base import ClientRegistry
 from app.models.enums import AgentPhase, IncidentStatus, InvestigatorKind
@@ -38,7 +38,7 @@ async def plan_node(state: InvestigationState) -> dict[str, Any]:
     ) as step:
         await set_phase(state, AgentPhase.PLAN)
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             registry = await ClientRegistry(tenant_id).load(session)
             available = available_investigators(registry)
             await registry.aclose()
@@ -148,7 +148,7 @@ async def plan_node(state: InvestigationState) -> dict[str, Any]:
             tasks=[t["investigator"] for t in tasks],
         )
 
-    async with session_scope() as session:
+    async with tenant_session_scope(tenant_id) as session:
         run = await session.get(AgentRun, uuid.UUID(state["run_id"]))
         if run is not None:
             run.plan = plan_payload

@@ -80,7 +80,7 @@ jobs:
           LLM_PROVIDER: fake
           REDIS_URL: redis://localhost:6379/15
           SECRET_KEY: ci-secret-key-long-enough-for-jwt-signing-abcdef
-        run: pytest -q --cov=app --cov-report=term-missing --cov-report=xml
+        run: pytest -q --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
       - name: Verify migrations apply to a real Postgres
         working-directory: backend
@@ -188,6 +188,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Scan images for known CVEs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: opspilot-api:ci
+          format: table
+          severity: CRITICAL,HIGH
+          # Only fail on CVEs with a published fix. Unfixed upstream issues
+          # (base-image Debian CVEs, ecdsa/Minerva) cannot gate a merge;
+          # they are tracked via pip-audit instead.
+          ignore-unfixed: true
+          exit-code: "1"
+
       - name: Smoke-test the API image
         run: |
           docker run -d --name api \
@@ -217,10 +229,10 @@ jobs:
         working-directory: backend
         run: |
           pip install pip-audit
-          pip-audit --skip-editable || true
+          pip-audit --skip-editable
       - name: Audit npm dependencies
         working-directory: frontend
-        run: npm audit --omit=dev || true
+        run: npm audit --omit=dev
       - name: Check for committed secrets
         run: |
           # A crude but effective net for the credential shapes this codebase

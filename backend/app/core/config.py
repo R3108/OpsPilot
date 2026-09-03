@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
         case_sensitive=False,
     )
 
@@ -129,6 +129,14 @@ class Settings(BaseSettings):
             problems.append("SECRET_KEY must be a strong 32+ char value in production")
         if not self.encryption_key:
             problems.append("ENCRYPTION_KEY is required in production")
+        for name, url in (
+            ("DATABASE_URL", self.database_url),
+            ("CHECKPOINT_DATABASE_URL", self.checkpoint_database_url),
+            ("REDIS_URL", self.redis_url),
+        ):
+            lowered = url.lower()
+            if "localhost" in lowered or "127.0.0.1" in lowered or "sqlite" in lowered:
+                problems.append(f"{name} must not point at localhost/sqlite in production")
         if self.llm_provider == "anthropic" and not self.anthropic_api_key:
             problems.append("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic")
         if self.llm_provider == "nvidia":

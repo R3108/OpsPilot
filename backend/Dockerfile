@@ -20,7 +20,10 @@ COPY pyproject.toml ./
 # Installing into a venv keeps the copy into the runtime stage a single directory.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --upgrade pip setuptools wheel && pip install .
+# Floors for transitive deps with known CVEs (see Trivy gate in CI). Applied
+# *after* `pip install .` so no dependency resolution can downgrade them again.
+RUN pip install --upgrade pip wheel && pip install . \
+    && pip install --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1"
 
 
 FROM python:3.12-slim AS runtime
@@ -33,6 +36,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl tini \
     && rm -rf /var/lib/apt/lists/* \
+    # The base image ships its own setuptools outside the venv; Trivy scans it
+    # too, so upgrade it rather than leaving the stale copy in the image.
+    && pip install --no-cache-dir --upgrade "setuptools>=78.1.1" \
+    && rm -rf /root/.cache \
     && groupadd --system --gid 1001 opspilot \
     && useradd --system --uid 1001 --gid opspilot --create-home opspilot
 

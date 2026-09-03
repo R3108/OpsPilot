@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
 from typing import Any
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.enums import (
@@ -458,6 +459,7 @@ def evaluate(inp: PolicyInput) -> PolicyDecision:
             reason=decision.reason,
             violations=[v.rule for v in violations],
         )
+        metrics.inc("opspilot_policy_denied_total", labels={"action_key": inp.spec.key})
         return decision
 
     if rule_role is not None and role_satisfies(rule_role, required_role):

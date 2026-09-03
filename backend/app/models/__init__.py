@@ -24,7 +24,7 @@ from app.models.remediation import (
     PolicyRule,
     RemediationAction,
 )
-from app.models.tenant import ApiKey, Tenant, User
+from app.models.tenant import ApiKey, RefreshToken, Tenant, User
 
 __all__ = [
     "ActionExecutionLog",
@@ -41,6 +41,7 @@ __all__ = [
     "Integration",
     "PolicyRule",
     "Postmortem",
+    "RefreshToken",
     "RemediationAction",
     "Runbook",
     "Tenant",

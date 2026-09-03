@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.collectors import EvidenceDraft
 from app.agents.state import InvestigationState
-from app.core.db import session_scope
+from app.core.db import session_scope, set_tenant_setting, tenant_session_scope
 from app.core.logging import get_logger, incident_id_ctx
 from app.models.enums import AgentEventType, AgentPhase, InvestigatorKind
 from app.models.incident import AgentRun, AgentStep, Evidence, Incident
@@ -73,7 +73,7 @@ async def _insert_step(
     attempts = 12
     for attempt in range(attempts):
         try:
-            async with session_scope() as session:
+            async with tenant_session_scope(tenant_id) as session:
                 current = (
                     await session.execute(
                         select(func.max(AgentStep.sequence)).where(AgentStep.run_id == run_id)
@@ -198,6 +198,7 @@ async def _finalise_step(
         step = await session.get(AgentStep, step_id)
         if step is None:  # pragma: no cover
             return
+        await set_tenant_setting(session, step.tenant_id)
         step.status = recorder.status
         step.output_summary = recorder.output_summary
         step.payload = recorder.payload
@@ -250,7 +251,7 @@ async def persist_evidence(
     now = datetime.now(UTC)
 
     digests: list[dict[str, Any]] = []
-    async with session_scope() as session:
+    async with tenant_session_scope(tenant_id) as session:
         for draft in drafts:
             row = Evidence(
                 tenant_id=tenant_id,
@@ -322,6 +323,13 @@ async def load_evidence_digests(
     incident_id: uuid.UUID, run_id: uuid.UUID | None = None
 ) -> list[dict[str, Any]]:
     async with session_scope() as session:
+        first = (
+            await session.execute(
+                select(Evidence.tenant_id).where(Evidence.incident_id == incident_id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if first is not None:
+            await set_tenant_setting(session, first)
         stmt = select(Evidence).where(Evidence.incident_id == incident_id)
         if run_id is not None:
             stmt = stmt.where(Evidence.agent_run_id == run_id)
@@ -355,23 +363,29 @@ async def record_usage(run_id: uuid.UUID, usage: Any) -> None:
         run = await session.get(AgentRun, run_id)
         if run is None:  # pragma: no cover
             return
+        await set_tenant_setting(session, run.tenant_id)
         run.prompt_tokens += usage.prompt_tokens
         run.completion_tokens += usage.completion_tokens
         run.cost_usd = round(run.cost_usd + usage.cost_usd, 6)
+        run.last_heartbeat_at = datetime.now(UTC)
 
 
 async def bump_tool_calls(run_id: uuid.UUID, count: int = 1) -> None:
     async with session_scope() as session:
         run = await session.get(AgentRun, run_id)
         if run is not None:
+            await set_tenant_setting(session, run.tenant_id)
             run.tool_call_count += count
+            run.last_heartbeat_at = datetime.now(UTC)
 
 
 async def set_phase(state: InvestigationState, phase: AgentPhase) -> None:
     async with session_scope() as session:
         run = await session.get(AgentRun, uuid.UUID(state["run_id"]))
         if run is not None:
+            await set_tenant_setting(session, run.tenant_id)
             run.phase = phase
+            run.last_heartbeat_at = datetime.now(UTC)
 
 
 async def add_timeline(
@@ -386,7 +400,7 @@ async def add_timeline(
 ) -> None:
     from app.models.incident import TimelineEntry
 
-    async with session_scope() as session:
+    async with tenant_session_scope(uuid.UUID(state["tenant_id"])) as session:
         session.add(
             TimelineEntry(
                 tenant_id=uuid.UUID(state["tenant_id"]),

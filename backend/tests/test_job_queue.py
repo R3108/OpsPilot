@@ -108,3 +108,14 @@ async def test_no_worker_heartbeat_runs_inline_rather_than_parking_the_job(
 
     assert not fake.calls, "job was queued with nothing to drain it"
     assert [job for job, _ in ran] == ["run_investigation"]
+
+
+async def test_repeated_health_checks_for_one_integration_deduplicate(pool: FakePool) -> None:
+    """Rapid integration edits collapse into one queued check, not a flood."""
+    integration_id = uuid.uuid4()
+
+    first = await queue_module.enqueue_integration_health_check(integration_id=integration_id)
+    second = await queue_module.enqueue_integration_health_check(integration_id=integration_id)
+
+    assert len(pool.calls) == 2
+    assert first == second == f"health:{integration_id}"

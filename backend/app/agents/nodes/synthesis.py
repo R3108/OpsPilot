@@ -25,7 +25,7 @@ from app.agents.runtime import (
     valid_citations,
 )
 from app.agents.state import InvestigationState
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.logging import get_logger
 from app.models.enums import (
     AgentEventType,
@@ -50,7 +50,7 @@ _RELEVANCE_WEIGHT = {
 
 async def correlate_node(state: InvestigationState) -> dict[str, Any]:
     incident_id = uuid.UUID(state["incident_id"])
-    uuid.UUID(state["tenant_id"])
+    tenant_id = uuid.UUID(state["tenant_id"])
     run_id = uuid.UUID(state["run_id"])
 
     digests = await load_evidence_digests(incident_id)
@@ -95,7 +95,7 @@ async def correlate_node(state: InvestigationState) -> dict[str, Any]:
             "gaps": list(correlation.gaps),
         }
 
-        await _reweight_evidence(incident_id, signals)
+        await _reweight_evidence(incident_id, signals, tenant_id=tenant_id)
 
         step.set_output(
             f"{len(signals)} correlated signal(s)"
@@ -126,7 +126,9 @@ async def correlate_node(state: InvestigationState) -> dict[str, Any]:
     }
 
 
-async def _reweight_evidence(incident_id: uuid.UUID, signals: list[dict[str, Any]]) -> None:
+async def _reweight_evidence(
+    incident_id: uuid.UUID, signals: list[dict[str, Any]], *, tenant_id: uuid.UUID
+) -> None:
     """Raise the weight of evidence that participates in a strong signal."""
     contributions: dict[str, float] = {}
     for signal in signals:
@@ -137,7 +139,7 @@ async def _reweight_evidence(incident_id: uuid.UUID, signals: list[dict[str, Any
     if not contributions:
         return
 
-    async with session_scope() as session:
+    async with tenant_session_scope(tenant_id) as session:
         rows = list(
             (await session.execute(select(Evidence).where(Evidence.incident_id == incident_id)))
             .scalars()
@@ -191,7 +193,7 @@ async def hypothesize_node(state: InvestigationState) -> dict[str, Any]:
         selected_index = min(max(result.selected_index, 0), len(result.hypotheses) - 1)
 
         stored: list[dict[str, Any]] = []
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             # Re-ranking replaces this run's hypotheses rather than appending, so
             # the UI never shows two competing rankings for one incident.
             await session.execute(
@@ -238,7 +240,7 @@ async def hypothesize_node(state: InvestigationState) -> dict[str, Any]:
 
         selected = stored[selected_index]
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await session.get(Incident, incident_id)
             if incident is not None:
                 incident.root_cause_summary = selected["title"]

@@ -18,7 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_db
+from app.core.db import get_db, set_tenant_setting
 from app.core.errors import AuthenticationError, PermissionDeniedError, RateLimitedError
 from app.core.logging import tenant_id_ctx, user_id_ctx
 from app.core.redis_client import rate_limit_ok
@@ -80,6 +80,9 @@ async def get_principal(
 
     tenant_id_ctx.set(str(principal.tenant_id))
     user_id_ctx.set(str(principal.id))
+    # Pin the Postgres RLS tenant for the rest of this request's transaction,
+    # so the database-level isolation matches the repository-layer filters.
+    await set_tenant_setting(session, principal.tenant_id)
     request.state.principal = principal
     return principal
 

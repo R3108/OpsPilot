@@ -1,0 +1,3 @@
+Static assets for the Next.js app live here. The file exists so the
+directory is committed and the Docker runtime copy never fails on a
+missing source.

@@ -34,7 +34,7 @@ from app.agents.runtime import (
 )
 from app.agents.state import InvestigationState
 from app.core.config import settings
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.logging import get_logger
 from app.integrations.base import ClientRegistry
 from app.models.enums import AgentPhase, IntegrationProvider, InvestigatorKind
@@ -87,7 +87,7 @@ async def run_investigator(state: InvestigationState, kind: InvestigatorKind) ->
             # ---- 1. collect (typed, read-only) --------------------------
             drafts = []
             collect_error: str | None = None
-            async with session_scope() as session:
+            async with tenant_session_scope(tenant_id) as session:
                 incident = await load_incident(session, incident_id)
                 registry = await ClientRegistry(
                     tenant_id, scenario=(incident.labels or {}).get("scenario")

@@ -27,7 +27,12 @@ import type {
 } from "./types";
 
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL ??
+  (process.env.NODE_ENV === "production"
+    ? (() => {
+        throw new Error("NEXT_PUBLIC_API_URL is required in production");
+      })()
+    : "http://localhost:8000");
 
 const ACCESS_KEY = "opspilot.access_token";
 const REFRESH_KEY = "opspilot.refresh_token";
@@ -178,6 +183,19 @@ export const api = {
   login: (body: { email: string; password: string; tenant_slug?: string }) =>
     request<TokenPair>("/api/v1/auth/login", { method: "POST", body }),
 
+  logout: () => {
+    const refresh = tokens.refresh();
+    tokens.clear();
+    if (!refresh) return Promise.resolve();
+    // Best effort: the server revokes the refresh token; the client is already
+    // signed out even if this fails.
+    return request("/api/v1/auth/logout", {
+      method: "POST",
+      body: { refresh_token: refresh },
+      retryOnAuthFailure: false,
+    }).catch(() => undefined);
+  },
+
   session: () => request<Session>("/api/v1/auth/session"),
 
   users: () => request<Page<User>>("/api/v1/auth/users", { query: { limit: 100 } }),
@@ -310,9 +328,20 @@ export const api = {
     }),
 };
 
-/** SSE endpoints need the token in the query string: EventSource cannot set headers. */
-export function streamUrl(path: string): string | null {
-  const access = tokens.access();
-  if (!access) return null;
-  return `${API_URL}/api/v1/stream${path}?token=${encodeURIComponent(access)}`;
+/**
+ * SSE endpoints need a credential in the query string because EventSource
+ * cannot set headers — but the raw access token must never appear in a URL
+ * (history, proxy logs, Referer). Mint a single-use ticket instead.
+ */
+export async function streamUrl(path: string): Promise<string | null> {
+  if (!tokens.access()) return null;
+  try {
+    const { ticket } = await request<{ ticket: string }>("/api/v1/stream/ticket", {
+      method: "POST",
+      retryOnAuthFailure: true,
+    });
+    return `${API_URL}/api/v1/stream${path}?ticket=${encodeURIComponent(ticket)}`;
+  } catch {
+    return null;
+  }
 }

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 
+from conftest import auth_headers_for
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import UserRole
 from app.models.tenant import User
-from tests.conftest import auth_headers_for
 
 
 async def test_signup_creates_tenant_and_owner(client: AsyncClient) -> None:
@@ -69,6 +69,60 @@ async def test_login_and_refresh(client: AsyncClient) -> None:
     )
     assert refreshed.status_code == 200
     assert refreshed.json()["access_token"]
+
+
+async def test_refresh_rotates_and_burns_the_old_token(client: AsyncClient) -> None:
+    """A refresh token is single-use: reuse after rotation is rejected."""
+    await client.post(
+        "/api/v1/auth/signup",
+        json={
+            "organization_name": "Rotate Co",
+            "email": "user@rotate.dev",
+            "password": "a-good-password-1",
+        },
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "user@rotate.dev", "password": "a-good-password-1"},
+    )
+    first_refresh = login.json()["refresh_token"]
+
+    rotated = await client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh})
+    assert rotated.status_code == 200
+    assert rotated.json()["refresh_token"] != first_refresh
+
+    replay = await client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh})
+    assert replay.status_code == 401
+
+
+async def test_logout_revokes_the_refresh_token(client: AsyncClient) -> None:
+    await client.post(
+        "/api/v1/auth/signup",
+        json={
+            "organization_name": "Logout Co",
+            "email": "user@logout.dev",
+            "password": "a-good-password-1",
+        },
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "user@logout.dev", "password": "a-good-password-1"},
+    )
+    refresh_token = login.json()["refresh_token"]
+
+    logged_out = await client.post("/api/v1/auth/logout", json={"refresh_token": refresh_token})
+    assert logged_out.status_code == 200
+
+    reuse = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert reuse.status_code == 401
+
+
+async def test_unknown_refresh_token_is_rejected(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": "not-a-real-token"},
+    )
+    assert response.status_code in (401, 422)
 
 
 async def test_wrong_password_is_rejected(client: AsyncClient) -> None:

@@ -28,7 +28,7 @@ from app.agents.runtime import (
 )
 from app.agents.state import InvestigationState
 from app.core.config import settings
-from app.core.db import session_scope
+from app.core.db import tenant_session_scope
 from app.core.errors import OpsPilotError
 from app.core.logging import get_logger
 from app.integrations.prometheus import STANDARD_QUERIES
@@ -101,7 +101,7 @@ async def propose_node(state: InvestigationState) -> dict[str, Any]:
         await set_phase(state, AgentPhase.PROPOSE_REMEDIATION)
 
         # The model is shown only actions this tenant could actually run.
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             from app.integrations.base import ClientRegistry
 
             registry = await ClientRegistry(tenant_id).load(session)
@@ -178,7 +178,7 @@ async def propose_node(state: InvestigationState) -> dict[str, Any]:
         created: list[str] = []
         rejected: list[dict[str, Any]] = []
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await session.get(Incident, incident_id)
             for item in sorted(proposal.actions, key=lambda a: a.sequence):
                 try:
@@ -286,7 +286,8 @@ async def propose_node(state: InvestigationState) -> dict[str, Any]:
                 state,
                 title=f"{len(created)} remediation action(s) proposed",
                 body="\n".join(
-                    f"- {a.action_key}: {a.rationale[:200]}" for a in await _load_actions(created)
+                    f"- {a.action_key}: {a.rationale[:200]}"
+                    for a in await _load_actions(created, tenant_id=tenant_id)
                 ),
                 phase=AgentPhase.PROPOSE_REMEDIATION,
             )
@@ -304,8 +305,8 @@ async def propose_node(state: InvestigationState) -> dict[str, Any]:
     }
 
 
-async def _load_actions(action_ids: list[str]) -> list[RemediationAction]:
-    async with session_scope() as session:
+async def _load_actions(action_ids: list[str], *, tenant_id: uuid.UUID) -> list[RemediationAction]:
+    async with tenant_session_scope(tenant_id) as session:
         return list(
             (
                 await session.execute(
@@ -349,7 +350,7 @@ async def policy_check_node(state: InvestigationState) -> dict[str, Any]:
         await set_phase(state, AgentPhase.POLICY_CHECK)
         hypothesis = state.get("selected_hypothesis") or {}
 
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             incident = await session.get(Incident, incident_id)
             if incident is None:
                 raise LookupError("incident disappeared during policy check")
@@ -539,7 +540,7 @@ def _approval_summary(action: RemediationAction, decision: Any, hypothesis: dict
 async def _announce_approval(
     tenant_id: uuid.UUID, incident_id: uuid.UUID, approval_id: uuid.UUID
 ) -> None:
-    async with session_scope() as session:
+    async with tenant_session_scope(tenant_id) as session:
         approval = await session.get(Approval, approval_id)
         incident = await session.get(Incident, incident_id)
         if approval is None or incident is None:
@@ -582,7 +583,7 @@ async def await_approval_node(state: InvestigationState) -> dict[str, Any]:
 
     await set_phase(state, AgentPhase.AWAIT_APPROVAL)
 
-    async with session_scope() as session:
+    async with tenant_session_scope(uuid.UUID(state["tenant_id"])) as session:
         approvals = list(
             (
                 await session.execute(
@@ -628,7 +629,7 @@ async def await_approval_node(state: InvestigationState) -> dict[str, Any]:
 # ==========================================================================
 async def execute_node(state: InvestigationState) -> dict[str, Any]:
     incident_id = uuid.UUID(state["incident_id"])
-    uuid.UUID(state["tenant_id"])
+    tenant_id = uuid.UUID(state["tenant_id"])
 
     async with agent_step(
         state,
@@ -639,7 +640,7 @@ async def execute_node(state: InvestigationState) -> dict[str, Any]:
         await set_phase(state, AgentPhase.EXECUTE)
 
         results: list[dict[str, Any]] = []
-        async with session_scope() as session:
+        async with tenant_session_scope(tenant_id) as session:
             actions = list(
                 (
                     await session.execute(

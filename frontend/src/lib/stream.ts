@@ -41,50 +41,60 @@ export function useAgentStream(
   useEffect(() => {
     if (!incidentId || !enabled) return;
 
-    const url = streamUrl(`/incidents/${incidentId}`);
-    if (!url) return;
+    let cancelled = false;
+    let source: EventSource | null = null;
 
-    seenIds.current = new Set();
-    // Resetting the buffer when switching incidents; the setStates land after
-    // the EventSource setup, not as render cascades.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setEvents([]);
-    setStatus("connecting");
-
-    const source = new EventSource(url);
-
-    const handle = (raw: MessageEvent<string>) => {
-      setLastHeartbeat(Date.now());
-      setStatus("live");
-
-      let payload: AgentEvent;
-      try {
-        payload = JSON.parse(raw.data) as AgentEvent;
-      } catch {
+    // The ticket is single-use with a 60s TTL, so mint it right before opening
+    // the socket rather than reusing a stale URL across reconnects.
+    void streamUrl(`/incidents/${incidentId}`).then((url) => {
+      if (cancelled || !url) {
+        if (!cancelled) setStatus("closed");
         return;
       }
-      if (payload.type === "heartbeat") return;
 
-      // The replay buffer can overlap with live events after a reconnect.
-      if (payload.id && seenIds.current.has(payload.id)) return;
-      if (payload.id) seenIds.current.add(payload.id);
+      seenIds.current = new Set();
+      // Resetting the buffer when switching incidents; the setStates land after
+      // the EventSource setup, not as render cascades.
+      setEvents([]);
+      setStatus("connecting");
 
-      onEventRef.current?.(payload);
-      setEvents((current) => {
-        const next = [...current, payload];
-        return next.length > limit ? next.slice(next.length - limit) : next;
-      });
-    };
+      const next = new EventSource(url);
+      source = next;
 
-    source.onmessage = handle;
-    source.onopen = () => setStatus("live");
-    source.onerror = () => {
-      // EventSource reconnects on its own; surface it rather than tearing down.
-      setStatus((current) => (current === "live" ? "stale" : current));
-    };
+      const handle = (raw: MessageEvent<string>) => {
+        setLastHeartbeat(Date.now());
+        setStatus("live");
+
+        let payload: AgentEvent;
+        try {
+          payload = JSON.parse(raw.data) as AgentEvent;
+        } catch {
+          return;
+        }
+        if (payload.type === "heartbeat") return;
+
+        // The replay buffer can overlap with live events after a reconnect.
+        if (payload.id && seenIds.current.has(payload.id)) return;
+        if (payload.id) seenIds.current.add(payload.id);
+
+        onEventRef.current?.(payload);
+        setEvents((current) => {
+          const following = [...current, payload];
+          return following.length > limit ? following.slice(following.length - limit) : following;
+        });
+      };
+
+      next.onmessage = handle;
+      next.onopen = () => setStatus("live");
+      next.onerror = () => {
+        // EventSource reconnects on its own; surface it rather than tearing down.
+        setStatus((current) => (current === "live" ? "stale" : current));
+      };
+    });
 
     return () => {
-      source.close();
+      cancelled = true;
+      source?.close();
       setStatus("closed");
     };
   }, [incidentId, enabled, limit]);
@@ -118,19 +128,27 @@ export function useTenantStream(onEvent: (event: AgentEvent) => void, enabled = 
 
   useEffect(() => {
     if (!enabled) return;
-    const url = streamUrl("/tenant");
-    if (!url) return;
 
-    const source = new EventSource(url);
-    source.onmessage = (raw: MessageEvent<string>) => {
-      try {
-        const payload = JSON.parse(raw.data) as AgentEvent;
-        if (payload.type !== "heartbeat") onEventRef.current(payload);
-      } catch {
-        /* ignore malformed frames */
-      }
+    let cancelled = false;
+    let source: EventSource | null = null;
+
+    void streamUrl("/tenant").then((url) => {
+      if (cancelled || !url) return;
+      const next = new EventSource(url);
+      source = next;
+      next.onmessage = (raw: MessageEvent<string>) => {
+        try {
+          const payload = JSON.parse(raw.data) as AgentEvent;
+          if (payload.type !== "heartbeat") onEventRef.current(payload);
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
+    });
+    return () => {
+      cancelled = true;
+      source?.close();
     };
-    return () => source.close();
   }, [enabled]);
 }
 

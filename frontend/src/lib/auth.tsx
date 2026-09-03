@@ -103,9 +103,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    tokens.clear();
     setSession(null);
     router.push("/login");
+    void api.logout();
   }, [router]);
 
   const can = useCallback(

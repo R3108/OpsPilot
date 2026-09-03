@@ -1,0 +1,27 @@
+# TLS edge for the prod stack. Served by the `proxy` profile in
+# docker-compose.prod.yml: `DOMAIN` + `CONTACT_EMAIL` come from the environment.
+
+{$DOMAIN} {
+	tls {$CONTACT_EMAIL}
+	encode gzip
+
+	# API (including SSE streams and webhooks)
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Health for load-balancer checks (readiness, not liveness)
+	handle /health/ready {
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the Next.js app
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
