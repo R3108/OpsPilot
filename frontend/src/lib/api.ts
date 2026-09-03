@@ -27,7 +27,12 @@ import type {
 } from "./types";
 
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL ??
+  (process.env.NODE_ENV === "production"
+    ? (() => {
+        throw new Error("NEXT_PUBLIC_API_URL is required in production");
+      })()
+    : "http://localhost:8000");
 
 const ACCESS_KEY = "opspilot.access_token";
 const REFRESH_KEY = "opspilot.refresh_token";
