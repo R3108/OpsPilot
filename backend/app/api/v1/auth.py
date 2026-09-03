@@ -212,11 +212,15 @@ async def refresh(payload: RefreshRequest, request: Request, session: DbSession)
             payload.refresh_token
         ):
             await _revoke_user_tokens(session, stored.user_id)
+            # get_db rolls back on raise, so commit the family burn first.
+            await session.commit()
         raise AuthenticationError("Refresh token is no longer valid")
     if stored.token_hash != hash_refresh_token(payload.refresh_token):
         raise AuthenticationError("Refresh token is no longer valid")
     if stored.expires_at < datetime.now(UTC):
         stored.revoked_at = datetime.now(UTC)
+        # get_db rolls back on raise, so commit the revocation first.
+        await session.commit()
         raise AuthenticationError("Refresh token has expired")
 
     user = await session.get(User, uuid.UUID(claims["sub"]))
