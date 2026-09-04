@@ -28,7 +28,7 @@ RUN pip install --upgrade pip wheel && pip install . \
     # vendored deps at stale versions (msgpack 1.1.2, setuptools 70.3.0). Trivy
     # scans embedded SBOMs and flagged those phantom versions, failing the CVE
     # gate. The vendored deps are not installed packages — strip the SBOM.
-    && find /opt/venv -name "bom.cdx.json" -delete
+    && find /opt/venv -type f -path "*/pip/_vendor/bom.cdx.json" -delete
 
 
 FROM python:3.12-slim AS runtime
@@ -47,7 +47,7 @@ RUN apt-get update \
     # Same vendored-SBOM strip as the builder, for the system pip the base
     # image ships (the strip above only covers /opt/venv). In python:slim
     # images all site-packages live under /usr/local/lib.
-    && find /usr/local/lib -name "bom.cdx.json" -delete \
+    && find /usr/local/lib -type f -path "*/pip/_vendor/bom.cdx.json" -delete \
     && rm -rf /root/.cache \
     && groupadd --system --gid 1001 opspilot \
     && useradd --system --uid 1001 --gid opspilot --create-home opspilot
