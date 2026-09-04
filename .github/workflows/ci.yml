@@ -232,7 +232,19 @@ jobs:
           pip-audit --skip-editable
       - name: Audit npm dependencies
         working-directory: frontend
-        run: npm audit --omit=dev
+        # The registry's audit endpoint intermittently 503s / 400s (it is being
+        # retired by npm); retry with backoff so registry flakes don't gate CI.
+        run: |
+          for attempt in 1 2 3; do
+            if npm audit --omit=dev; then
+              exit 0
+            fi
+            echo "npm audit attempt $attempt failed; retrying after backoff…" >&2
+            sleep $((attempt * 20))
+          done
+          echo "npm audit failed after 3 attempts" >&2
+          exit 1
+        shell: bash
       - name: Check for committed secrets
         run: |
           # A crude but effective net for the credential shapes this codebase

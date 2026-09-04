@@ -64,6 +64,13 @@ frontend headers; CSP should be added per deployment in `next.config.ts`.
 - `next.config.ts` throws at build when `NEXT_PUBLIC_API_URL` is unset, so a
   misconfigured build fails loudly instead of shipping a localhost client.
 
+## Operator console
+
+The CLI console talks to whatever API you point it at:
+`python -m app.console https://opspilot.example.com` (or set `OPSPILOT_URL`).
+Authenticate as a machine with `OPSPILOT_API_KEY=opk_... python -m app.console`
+instead of a user login — see `backend/app/console.py`.
+
 ## CI gates
 
 `ruff check` + `ruff format --check`, `pytest` with `--cov-fail-under=70`,

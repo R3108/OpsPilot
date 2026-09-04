@@ -124,6 +124,26 @@ make dev-backend    # uvicorn on :8000  (needs local postgres+redis, see .env)
 make dev-frontend   # next dev on :3000
 ```
 
+### Operator console
+
+```bash
+cd backend && python -m app.console                # http://localhost:8000
+python -m app.console https://api.example.com      # any deployed API
+OPSPILOT_API_KEY=opk_... python -m app.console     # API-key auth instead of login
+```
+
+An interactive operator shell over the HTTP API: sign in with
+`login <email> <password> [tenant_slug]` (JWT with automatic refresh) or
+`signup`, then work incidents from one terminal. `investigate [ref]` queues
+the agent swarm and streams it live over SSE (falls back to polling incident
+status when Redis is down; `watch` reattaches); `incidents` / `incident <ref>`
+/ `new`, `runs` / `steps <run_id>` / `evidence` / `actions` / `postmortem`,
+`approvals` / `approve <id>` / `reject <id>`, `integrations` / `connect
+<provider>` / `test <id>`, and `check_github <owner/repo> [hours]` — one
+command that connects the GitHub provider if needed, files a "what changed in
+my repo" incident and swarms it. `help` lists everything; `?` / `ls` / `i` /
+`w` / `exit` are aliases.
+
 ## Repo layout
 
 ```
