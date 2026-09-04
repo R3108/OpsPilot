@@ -23,7 +23,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Floors for transitive deps with known CVEs (see Trivy gate in CI). Applied
 # *after* `pip install .` so no dependency resolution can downgrade them again.
 RUN pip install --upgrade pip wheel && pip install . \
-    && pip install --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1"
+    && pip install --upgrade "setuptools>=78.1.1" \
+    # pip>=26.2 vendors a CycloneDX SBOM (pip/_vendor/bom.cdx.json) listing its
+    # vendored deps at stale versions (msgpack 1.1.2, setuptools 70.3.0). Trivy
+    # scans embedded SBOMs and flagged those phantom versions, failing the CVE
+    # gate. The vendored deps are not installed packages — strip the SBOM.
+    && find /opt/venv -name "bom.cdx.json" -delete
 
 
 FROM python:3.12-slim AS runtime
@@ -39,6 +44,10 @@ RUN apt-get update \
     # The base image ships its own setuptools outside the venv; Trivy scans it
     # too, so upgrade it rather than leaving the stale copy in the image.
     && pip install --no-cache-dir --upgrade "setuptools>=78.1.1" \
+    # Same vendored-SBOM strip as the builder, for the system pip the base
+    # image ships (the strip above only covers /opt/venv). In python:slim
+    # images all site-packages live under /usr/local/lib.
+    && find /usr/local/lib -name "bom.cdx.json" -delete \
     && rm -rf /root/.cache \
     && groupadd --system --gid 1001 opspilot \
     && useradd --system --uid 1001 --gid opspilot --create-home opspilot
