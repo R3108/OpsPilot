@@ -93,3 +93,11 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
+# The interactive console is a terminal client verified end-to-end against a
+# live API, not a unit-testable module; counting its lines would drag the
+# coverage gate without measuring anything real.
+[tool.coverage.run]
+omit = ["app/console.py"]
+
+[tool.coverage.report]
+exclude_also = ["if __name__ == .__main__.:"]
