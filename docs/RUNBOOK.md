@@ -59,6 +59,27 @@ failed migration blocks both with manual recovery (see below).
 - Brute force: login/signup/refresh are IP-throttled (10/min). Flood shows as
   `rate_limited` 429s.
 
+## Operator console
+
+`cd backend && python -m app.console [BASE_URL]` (default `http://localhost:8000`,
+or `OPSPILOT_URL`; `OPSPILOT_API_KEY=...` authenticates with an API key). Sign
+in with `login <email> <password> [tenant_slug]`; `help` lists everything.
+
+Use it on call rather than the web UI when you need a terminal:
+
+- Watch an investigation live: `investigate [ref]` queues the swarm and
+  streams it over SSE — Ctrl+C detaches without stopping it, `watch`
+  reattaches. If Redis is down the console falls back to polling the
+  incident's status, so `investigate` still shows progress.
+- Work the approval queue: `approvals` lists pending decisions,
+  `approve <id> [note]` / `reject <id> [note]` resolves them. A run parked on
+  an approval stays `awaiting_approval` until someone decides — the
+  `approval_ttl_minutes` expiry (see Kill switches) is what clears forgotten
+  ones.
+- Inspect without touching state: `incidents`, `incident <ref>`, `runs`,
+  `steps <run_id>`, `evidence`, `actions`, `postmortem` are all read-only
+  views over the API.
+
 ## Backup and restore
 
 - Nightly dump: `docker compose --profile backup up backup` writes

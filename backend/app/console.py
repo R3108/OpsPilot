@@ -79,6 +79,8 @@ session
   login [email] [password] [tenant_slug]
   signup                  create an organisation and its owner
   logout, whoami, status, quit / exit
+
+  aliases: ? = help, ls = incidents, i = investigate, w = watch, exit = quit
 """
 
 
@@ -170,25 +172,28 @@ class Client:
     ) -> dict[str, Any]:
         if auth and not (self.token or self.api_key):
             raise ConsoleError("Not signed in — try: login <email> <password>")
-        try:
-            response = self.http.request(
-                method,
-                path,
-                json=body,
-                params={k: v for k, v in (params or {}).items() if v is not None},
-                headers=self._headers() if auth else {},
-            )
-        except httpx.ConnectError as exc:
-            raise ConsoleError(
-                f"Cannot reach {self.base_url} — is the API running? ({exc})"
-            ) from None
-        if (
-            response.status_code == 401
-            and self.refresh
-            and not self.api_key
-            and self._try_refresh()
-        ):
-            return self.request(method, path, body=body, params=params, auth=auth)
+        for _attempt in range(2):  # one original try + at most one retry after refresh
+            try:
+                response = self.http.request(
+                    method,
+                    path,
+                    json=body,
+                    params={k: v for k, v in (params or {}).items() if v is not None},
+                    headers=self._headers() if auth else {},
+                )
+            except httpx.ConnectError as exc:
+                raise ConsoleError(
+                    f"Cannot reach {self.base_url} — is the API running? ({exc})"
+                ) from None
+            if (
+                response.status_code == 401
+                and _attempt == 0
+                and self.refresh
+                and not self.api_key
+                and self._try_refresh()
+            ):
+                continue
+            break
         if response.status_code >= 400:
             try:
                 message = response.json().get("error", {}).get("message", response.text)
@@ -205,7 +210,7 @@ class Client:
         except httpx.HTTPError:
             return False
         if response.status_code != 200:
-            self.token = None
+            self.token = self.refresh = None
             return False
         pair = response.json()
         self.token = pair["access_token"]
@@ -271,28 +276,33 @@ class Client:
             headers=self._headers(),
             timeout=httpx.Timeout(30.0, read=60.0),
         ) as response:
-            if response.status_code == 404:
-                print(_red("Incident stream not found"))
+            try:
+                if response.status_code == 404:
+                    print(_red("Incident stream not found"))
+                    return
+                response.raise_for_status()
+                event_type = ""
+                for line in response.iter_lines():
+                    if line.startswith("event:"):
+                        event_type = line.split(":", 1)[1].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line.split(":", 1)[1].strip()
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    kind = event.get("type") or event_type
+                    if kind == "heartbeat":
+                        print(_dim("·"), end="", flush=True)
+                        continue
+                    if _render_event(event):
+                        return  # graph settled
+            except httpx.HTTPError as exc:
+                print(_red(f"stream failed: {exc}"))
+                self.poll_incident(incident_id)
                 return
-            response.raise_for_status()
-            event_type = ""
-            for line in response.iter_lines():
-                if line.startswith("event:"):
-                    event_type = line.split(":", 1)[1].strip()
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                raw = line.split(":", 1)[1].strip()
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                kind = event.get("type") or event_type
-                if kind == "heartbeat":
-                    print(_dim("·"), end="", flush=True)
-                    continue
-                if _render_event(event):
-                    return  # graph settled
         print(_dim("(stream closed)"))
 
     def poll_incident(self, incident_id: str, *, timeout_seconds: float = 900) -> None:
@@ -488,7 +498,10 @@ class Console:
 
     # -- incidents ----------------------------------------------------------
     def do_incidents(self, args: list[str]) -> None:
-        limit = int(args[0]) if args else 20
+        try:
+            limit = int(args[0]) if args else 20
+        except ValueError:
+            raise ConsoleError("usage: incidents [count] — count must be a number") from None
         page = self.client.request("GET", "/api/v1/incidents", params={"limit": limit, "offset": 0})
         items = page.get("items", [])
         if not items:
@@ -790,7 +803,7 @@ class Console:
         credentials: dict[str, str] = {}
         for key in cred_keys:
             credentials[key] = prompt_secret(f"credential {key}")
-        config: dict[str, str] = {}
+        config: dict[str, Any] = {}
         for key in config_keys:
             if provider == "github" and key == "repos":
                 repos = prompt("repos (comma-separated owner/repo)", default="")
@@ -835,6 +848,10 @@ class Console:
         if not args:
             raise ConsoleError("usage: check_github <owner/repo>")
         repo = args[0].strip().strip("/")
+        if "/" not in repo:
+            raise ConsoleError(
+                "usage: check_github <owner/repo> — e.g. check_github R3108/OpsPilot"
+            )
 
         github = self._find_integration("github", repo)
         if github is None:
@@ -936,12 +953,9 @@ def main(argv: list[str] | None = None) -> int:
 
     while True:
         try:
-            print(
-                f"{_green('opspilot')}"
-                f"{_dim('@' + (console.current or {}).get('reference', ''))} > ",
-                end="",
-                flush=True,
-            )
+            ref = (console.current or {}).get("reference")
+            suffix = f"@{ref} " if ref else ""
+            print(f"{_green('opspilot')}{_dim(suffix)}> ", end="", flush=True)
             line = input()
         except (EOFError, KeyboardInterrupt):
             print()
@@ -955,6 +969,10 @@ def main(argv: list[str] | None = None) -> int:
             print(_red(str(exc)))
         except SystemExit:
             return 0
+        except (ValueError, EOFError) as exc:
+            print(_red(f"{exc}"))
+        except KeyboardInterrupt:
+            print(_dim("(interrupted — Ctrl+C again or 'quit' to exit)"))
 
 
 if __name__ == "__main__":
